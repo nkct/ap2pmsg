@@ -20,15 +20,18 @@ fn main() {
 
     thread::spawn(move|| {
         loop {
-            if let Ok(mut connection) = TcpStream::connect_timeout(&input.as_str().parse::<SocketAddr>().unwrap(), Duration::from_millis(500)) {
-                println!("Connected on {}.", connection.peer_addr().unwrap());
+            let conn = TcpStream::connect_timeout(&input.as_str().parse::<SocketAddr>().unwrap(), Duration::from_millis(500));
+            match conn {
+                Ok(mut conn) => {
+                    println!("Connected on {}.", conn.peer_addr().unwrap());
 
-                connection.write(b"Request").unwrap();
-                println!("Pinged {}.", &input);
-            } else {
-                println!("Couldn't connect to peer on {:?}.", &input)
-            }
-            
+                    conn.write(b"Request").unwrap();
+                    println!("Pinged {}.", conn.peer_addr().unwrap());
+                },
+                Err(e) => {
+                    println!("Couldn't connect to peer on {:?}, Error: {}.", &input, e)
+                }
+            }            
 
             thread::sleep(Duration::from_millis(3000))
         }
