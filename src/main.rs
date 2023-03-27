@@ -11,7 +11,7 @@ fn main() {
     println!("Enter peer ip adress and port");
     let mut input = String::new();
     stdin().read_line(&mut input).unwrap();
-    input.pop();
+    let input: String = input.split_whitespace().collect::<Vec<_>>().join(" ");
 
     let ip_pattern = Regex::new(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,4}$").unwrap();
     if !ip_pattern.is_match(&input) {
@@ -26,7 +26,7 @@ fn main() {
                 connection.write(b"Request").unwrap();
                 println!("Pinged {}.", &input);
             } else {
-                println!("Couldn't connect to peer.")
+                println!("Couldn't connect to peer on {:?}.", &input)
             }
             
 
