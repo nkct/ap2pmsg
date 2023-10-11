@@ -1,46 +1,31 @@
 use std::{
     thread,
-    time::Duration,
-    io::{prelude::*, BufReader, stdin},
-    net::{TcpListener, TcpStream, SocketAddr}, 
-    panic,
+    io::{prelude::*, BufReader, BufWriter, self, stdin},
+    net::{TcpListener, TcpStream, ToSocketAddrs}, error::Error, 
 };
 use regex::Regex;
 
-fn main() {
-    println!("Enter peer ip adress and port");
-    let mut input = String::new();
-    stdin().read_line(&mut input).unwrap();
-    let input: String = input.split_whitespace().collect::<Vec<_>>().join(" ");
+fn get_listener<A: ToSocketAddrs>(addr: A) -> Result<TcpListener, Box<dyn Error>> {
+    let addr = addr.to_socket_addrs()?.next().unwrap();
+    let ip = addr.ip();
+    let port = addr.port();
 
-    let ip_pattern = Regex::new(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,4}$").unwrap();
-    if !ip_pattern.is_match(&input) {
-        panic!("Invalid ip or port for {:?}.", &input);
-    }
-
-    thread::spawn(move|| {
-        loop {
-            let conn = TcpStream::connect_timeout(&input.as_str().parse::<SocketAddr>().unwrap(), Duration::from_millis(500));
-            match conn {
-                Ok(mut conn) => {
-                    println!("Connected on {}.", conn.peer_addr().unwrap());
-
-                    conn.write(b"Request").unwrap();
-                    println!("Pinged {}.", conn.peer_addr().unwrap());
-                },
-                Err(e) => {
-                    println!("Couldn't connect to peer on {:?}, Error: {}.", &input, e)
-                }
-            }            
-
-            thread::sleep(Duration::from_millis(3000))
+    let listener = match TcpListener::bind(&format!("{}:{}", ip, port)) {
+        Ok(listener) => { listener },
+        Err(e) => {
+            if e.kind() == io::ErrorKind::AddrInUse {
+                TcpListener::bind(&format!("{}:0", ip))?
+            } else {
+                return Err(Box::new(e));
+            }
         }
-    });
+    };
 
-    let server_addr = "0.0.0.0:7878";
-    let listener = TcpListener::bind(server_addr).unwrap();
-    println!("Bound on {}.", server_addr);
+    println!("Bound on {}", listener.local_addr()?);
+    return Ok(listener);
+}
 
+fn listen(listener: TcpListener) {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
@@ -54,17 +39,72 @@ fn main() {
             }
         }
     }
+
+    fn handle_connection(conn: TcpStream) {
+        let mut writer = BufWriter::new(conn.try_clone().unwrap());
+        let mut reader = BufReader::new(conn.try_clone().unwrap());
+    
+        loop {
+            let mut request = String::new();
+            reader.read_line(&mut request).unwrap();
+            if request.is_empty() {
+                println!("{} has closed the connection.", conn.peer_addr().unwrap());
+                break;
+            }
+
+            println!("Request: {:#?}", request);
+    
+            writer.write(b"Response\n").unwrap();
+            writer.flush().unwrap();
+        } 
+    }
 }
 
-fn handle_connection(mut stream: TcpStream) {
-    let buf_reader = BufReader::new(&mut stream);
-    let request: Vec<_> = buf_reader
-        .lines()
-        .map(|result| result.unwrap())
-        .take_while(|line| !line.is_empty())
-        .collect();
+fn main() {
+    let listener = get_listener("0.0.0.0:7878").unwrap();
+    thread::spawn(move|| {
+        listen(listener);
+    });
 
-    println!("Request: {:#?}", request);
+    let mut input = String::new();
+    loop {
+        println!("Enter peer ip adress and port");
+        stdin().read_line(&mut input).unwrap();
+        input = input.split_whitespace().collect::<Vec<_>>().join(" ");
 
-    stream.write(b"Response").unwrap();
+        let ip_pattern = Regex::new(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,6}$").unwrap();
+        if !ip_pattern.is_match(&input) {
+            println!("Invalid ip or port for {:?}.", &input);
+            input = String::from("");
+        } else {
+            break;
+        }
+    }
+    
+
+    match TcpStream::connect(&input) {
+        Ok(conn) => {
+            let peer_addr = conn.peer_addr().unwrap();
+            println!("Connected on {}.", peer_addr);
+            let mut writer = BufWriter::new(conn.try_clone().unwrap());
+            let mut reader = BufReader::new(conn);
+            loop {
+                println!("Type your message: ");
+                let mut input = String::new();
+                let mut response = String::new();
+                stdin().read_line(&mut input).unwrap();
+                writer.write(input.as_bytes()).unwrap();
+                writer.flush().unwrap();
+                reader.read_line(&mut response).unwrap();
+                if response.is_empty() {
+                    println!("{} has closed the connection.", peer_addr);
+                    break;
+                }
+                println!("Response: {:?}", response.trim());
+            }
+        },
+        Err(e) => {
+            println!("Couldn't connect to peer on {:?}, Error: {}.", input, e)
+        }
+    }
 }
