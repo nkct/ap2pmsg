@@ -1,9 +1,42 @@
 use std::{
     thread,
     io::{prelude::*, BufReader, BufWriter, self, stdin},
-    net::{TcpListener, TcpStream, ToSocketAddrs}, error::Error, 
+    net::{TcpListener, TcpStream, ToSocketAddrs, SocketAddr}, error::Error, 
 };
 use regex::Regex;
+use time::OffsetDateTime;
+use serde::{Serialize, Deserialize};
+use serde_json;
+
+#[derive(Serialize, Deserialize, Debug)]
+enum MessageContent {
+    Text(String),
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct MessageMetadata {
+    sender: SocketAddr,
+    time_sent: OffsetDateTime,
+}
+impl MessageMetadata {
+    fn new(sender: SocketAddr) -> Self {
+        Self { sender, time_sent: OffsetDateTime::now_utc() }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Message {
+    metadata: MessageMetadata,
+    content: MessageContent,
+}
+impl Message {
+    fn new_text(content: &str, sender: SocketAddr) -> Self {
+        Message {
+            metadata: MessageMetadata::new(sender),
+            content: MessageContent::Text(content.to_owned()),
+        }
+    }
+}
 
 fn get_listener<A: ToSocketAddrs>(addr: A) -> Result<TcpListener, Box<dyn Error>> {
     let addr = addr.to_socket_addrs()?.next().unwrap();
@@ -41,6 +74,7 @@ fn listen(listener: TcpListener) {
     }
 
     fn handle_connection(conn: TcpStream) {
+        let peer_addr = conn.peer_addr().unwrap();
         let mut writer = BufWriter::new(conn.try_clone().unwrap());
         let mut reader = BufReader::new(conn.try_clone().unwrap());
     
@@ -48,11 +82,11 @@ fn listen(listener: TcpListener) {
             let mut request = String::new();
             reader.read_line(&mut request).unwrap();
             if request.is_empty() {
-                println!("{} has closed the connection.", conn.peer_addr().unwrap());
+                println!("{} has closed the connection.", peer_addr);
                 break;
             }
 
-            println!("Request: {:#?}", request);
+            println!("Request: {:#?}", serde_json::from_str::<Message>(&request).unwrap());
     
             writer.write(b"Response\n").unwrap();
             writer.flush().unwrap();
@@ -85,6 +119,7 @@ fn main() {
     match TcpStream::connect(&input) {
         Ok(conn) => {
             let peer_addr = conn.peer_addr().unwrap();
+            let local_addr = conn.local_addr().unwrap();
             println!("Connected on {}.", peer_addr);
             let mut writer = BufWriter::new(conn.try_clone().unwrap());
             let mut reader = BufReader::new(conn);
@@ -93,7 +128,10 @@ fn main() {
                 let mut input = String::new();
                 let mut response = String::new();
                 stdin().read_line(&mut input).unwrap();
-                writer.write(input.as_bytes()).unwrap();
+                let message = Message::new_text(&input, local_addr);
+                let request = serde_json::to_string(&message).unwrap() + "\n";
+                println!("{:?}", request);
+                writer.write(request.as_bytes()).unwrap();
                 writer.flush().unwrap();
                 reader.read_line(&mut response).unwrap();
                 if response.is_empty() {
