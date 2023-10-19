@@ -3,7 +3,6 @@ use std::{
     io::{prelude::*, BufReader, BufWriter, self, stdin},
     net::{TcpListener, TcpStream, ToSocketAddrs}, error::Error, 
 };
-use regex::Regex;
 use serde_json;
 
 use ap2pmsg::*;
@@ -51,13 +50,28 @@ fn listen(listener: TcpListener) {
         loop {
             let mut request = String::new();
             reader.read_line(&mut request).unwrap();
+
             if request.is_empty() {
                 println!("{} has closed the connection.", peer_addr);
                 break;
             }
 
-            println!("Request: {:#?}", serde_json::from_str::<Message>(&request).unwrap());
-    
+            match serde_json::from_str::<ServerRequest>(&request) {
+                Ok(request) => {
+                    match request {
+                        ServerRequest::Send((addr, content)) => {
+                            println!("Server Request: Send({}, {:?})", addr, content)
+                        }
+                    }
+                },
+                Err(e) => {
+                    println!("ERROR: Invalid request \n{} \n{:#?}", e, request);
+                    writer.write(b"ERROR: Invalid request\n").unwrap();
+                    writer.flush().unwrap();
+                    continue;
+                }
+            }
+
             writer.write(b"Response\n").unwrap();
             writer.flush().unwrap();
         } 
@@ -69,49 +83,6 @@ fn main() {
     thread::spawn(move|| {
         listen(listener);
     });
-
-    let mut input = String::new();
-    loop {
-        println!("Enter peer ip adress and port");
-        stdin().read_line(&mut input).unwrap();
-        input = input.split_whitespace().collect::<Vec<_>>().join(" ");
-
-        let ip_pattern = Regex::new(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,6}$").unwrap();
-        if !ip_pattern.is_match(&input) {
-            println!("Invalid ip or port for {:?}.", &input);
-            input = String::from("");
-        } else {
-            break;
-        }
-    }
-    
-
-    match TcpStream::connect(&input) {
-        Ok(conn) => {
-            let peer_addr = conn.peer_addr().unwrap();
-            let local_addr = conn.local_addr().unwrap();
-            println!("Connected on {}.", peer_addr);
-            let mut writer = BufWriter::new(conn.try_clone().unwrap());
-            let mut reader = BufReader::new(conn);
-            loop {
-                println!("Type your message: ");
-                let mut input = String::new();
-                let mut response = String::new();
-                stdin().read_line(&mut input).unwrap();
-                let message = Message::new_text(&input, local_addr);
-                let request = serde_json::to_string(&message).unwrap() + "\n";
-                writer.write(request.as_bytes()).unwrap();
-                writer.flush().unwrap();
-                reader.read_line(&mut response).unwrap();
-                if response.is_empty() {
-                    println!("{} has closed the connection.", peer_addr);
-                    break;
-                }
-                println!("Response: {:?}", response.trim());
-            }
-        },
-        Err(e) => {
-            println!("Couldn't connect to peer on {:?}, Error: {}.", input, e)
-        }
-    }
+    let mut exit = String::new();
+    stdin().read_line(&mut exit).unwrap();
 }
