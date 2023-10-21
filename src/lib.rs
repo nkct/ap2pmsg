@@ -37,3 +37,9 @@ impl Message {
         }
     }
 }
+
+#[derive(Debug)]
+pub enum FrontendType {
+    CLI,
+    WEB,
+}

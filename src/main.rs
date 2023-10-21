@@ -1,12 +1,48 @@
 use std::{
     thread,
     io::{prelude::*, BufReader, BufWriter, self, stdin},
-    net::{TcpListener, TcpStream, ToSocketAddrs}, error::Error, 
+    net::{TcpListener, TcpStream, ToSocketAddrs}, error::Error, env, 
 };
-use regex::Regex;
 use serde_json;
 
 use ap2pmsg::*;
+
+fn main() {
+    let args: Vec<_> = env::args().collect();
+    let mut frontend_type = FrontendType::CLI;
+    let mut serv_in_background = true;
+
+    if args.len() >= 2 {
+        for (i, arg) in args.iter().enumerate() {
+            if arg == "-f" || arg == "--frontend" {
+                if args.len() < i + 1 {
+                    panic!("ERROR: Did not supply value for frontend_type argument")
+                }
+                match args[i + 1].to_uppercase().as_str() {
+                    "CLI" | "C" | "CMD" | "TERMINAL" => { frontend_type = FrontendType::CLI },
+                    "WEB" | "W" | "REACT" => { frontend_type = FrontendType::WEB },
+                    _ => { panic!("ERROR: Invalid value for flag frontend_type ('-f', '--frontend'): {}", args[i + 1]) }
+                }
+            }
+            if arg == "-b" || arg == "--background" {
+                if serv_in_background {
+                    serv_in_background = false
+                } else {
+                    serv_in_background = true
+                }
+            }
+        }
+    }
+
+    println!("{:?}\n{}", frontend_type, serv_in_background);
+
+    let listener = get_listener("0.0.0.0:7878").unwrap();
+    thread::spawn(move|| {
+        listen(listener);
+    });
+    let mut exit = String::new();
+    stdin().read_line(&mut exit).unwrap();
+}
 
 fn get_listener<A: ToSocketAddrs>(addr: A) -> Result<TcpListener, Box<dyn Error>> {
     let addr = addr.to_socket_addrs()?.next().unwrap();
@@ -51,67 +87,30 @@ fn listen(listener: TcpListener) {
         loop {
             let mut request = String::new();
             reader.read_line(&mut request).unwrap();
+
             if request.is_empty() {
                 println!("{} has closed the connection.", peer_addr);
                 break;
             }
 
-            println!("Request: {:#?}", serde_json::from_str::<Message>(&request).unwrap());
-    
+            match serde_json::from_str::<ServerRequest>(&request) {
+                Ok(request) => {
+                    match request {
+                        ServerRequest::Send((addr, content)) => {
+                            println!("Server Request: Send({}, {:?})", addr, content)
+                        }
+                    }
+                },
+                Err(e) => {
+                    println!("ERROR: Invalid request \n{} \n{:#?}", e, request);
+                    writer.write(b"ERROR: Invalid request\n").unwrap();
+                    writer.flush().unwrap();
+                    continue;
+                }
+            }
+
             writer.write(b"Response\n").unwrap();
             writer.flush().unwrap();
         } 
-    }
-}
-
-fn main() {
-    let listener = get_listener("0.0.0.0:7878").unwrap();
-    thread::spawn(move|| {
-        listen(listener);
-    });
-
-    let mut input = String::new();
-    loop {
-        println!("Enter peer ip adress and port");
-        stdin().read_line(&mut input).unwrap();
-        input = input.split_whitespace().collect::<Vec<_>>().join(" ");
-
-        let ip_pattern = Regex::new(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,6}$").unwrap();
-        if !ip_pattern.is_match(&input) {
-            println!("Invalid ip or port for {:?}.", &input);
-            input = String::from("");
-        } else {
-            break;
-        }
-    }
-    
-
-    match TcpStream::connect(&input) {
-        Ok(conn) => {
-            let peer_addr = conn.peer_addr().unwrap();
-            let local_addr = conn.local_addr().unwrap();
-            println!("Connected on {}.", peer_addr);
-            let mut writer = BufWriter::new(conn.try_clone().unwrap());
-            let mut reader = BufReader::new(conn);
-            loop {
-                println!("Type your message: ");
-                let mut input = String::new();
-                let mut response = String::new();
-                stdin().read_line(&mut input).unwrap();
-                let message = Message::new_text(&input, local_addr);
-                let request = serde_json::to_string(&message).unwrap() + "\n";
-                writer.write(request.as_bytes()).unwrap();
-                writer.flush().unwrap();
-                reader.read_line(&mut response).unwrap();
-                if response.is_empty() {
-                    println!("{} has closed the connection.", peer_addr);
-                    break;
-                }
-                println!("Response: {:?}", response.trim());
-            }
-        },
-        Err(e) => {
-            println!("Couldn't connect to peer on {:?}, Error: {}.", input, e)
-        }
     }
 }
