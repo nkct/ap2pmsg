@@ -68,7 +68,7 @@ fn main() {
     }
 
     if serv_in_background {
-        panic!("TODO: Running server in the background is not yet implemented")
+        panic!("TODO: Running backend in the background is not yet implemented")
     }
 
     listener_thread.join().unwrap();
@@ -122,9 +122,12 @@ fn listen(listener: TcpListener) {
         let mut reader = BufReader::new(frontend_conn.try_clone().unwrap());
 
         if frontend_addr.is_some() {
-            writer.write(format!(
-                "ER: Connection to backend refused; this backend is already serving a frontend at: {}\n", frontend_addr.unwrap()
-            ).as_bytes()).unwrap();
+            let response = serde_json::to_string(
+                &BackendResponse::ConnectionEstablished(Err(format!(
+                    "Connection to backend refused; this backend is already serving a frontend at: {}\n", frontend_addr.unwrap()
+                )))
+            ).unwrap() + "\n";
+            writer.write(response.as_bytes()).unwrap();
             writer.flush().unwrap();
             drop(frontend_conn);
             continue;
@@ -132,7 +135,10 @@ fn listen(listener: TcpListener) {
         frontend_addr = frontend_conn.peer_addr().ok();
 
         listener_thread = Some(thread::spawn(move|| {
-            writer.write("OK: Connection to backend succesfully established\n".as_bytes()).unwrap();
+            let response = serde_json::to_string(
+                &BackendResponse::ConnectionEstablished(Ok(()))
+            ).unwrap() + "\n";
+            writer.write(response.as_bytes()).unwrap();
             writer.flush().unwrap();
                 
             println!("New connection: {}", frontend_addr.unwrap());            
@@ -147,11 +153,11 @@ fn listen(listener: TcpListener) {
                     break;
                 }
     
-                match serde_json::from_str::<ServerRequest>(&request) {
+                match serde_json::from_str::<BackendRequest>(&request) {
                     Ok(request) => {
                         match request {
-                            ServerRequest::Send((addr, content)) => {
-                                println!("Server Request: Send({}, {:?})", addr, content)
+                            BackendRequest::Send((addr, content)) => {
+                                println!("Backend Request: Send({}, {:?})", addr, content)
                             }
                         }
                     },

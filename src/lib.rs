@@ -1,11 +1,15 @@
-use std::net::SocketAddr;
-
+use std::{net::SocketAddr};
 use serde::{Serialize, Deserialize};
 use time::OffsetDateTime;
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum ServerRequest {
+pub enum BackendRequest {
     Send((SocketAddr, MessageContent)),
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum BackendResponse {
+    ConnectionEstablished(Result<(), String>)
 }
 
 #[derive(Serialize, Deserialize, Debug)]
