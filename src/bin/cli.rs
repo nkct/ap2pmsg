@@ -15,21 +15,14 @@ fn main() {
         println!("Enter request to server: ");
         stdin().read_line(&mut input).unwrap();
 
-        match &input[0..1] {
-            "M" => {
-                let mut serv_writer = BufWriter::new(serv_conn.try_clone().unwrap());
-                let request = serde_json::to_string(
-                    &ServerRequest::Send((
-                        server_addr.parse().unwrap(), 
-                        MessageContent::Text(input[2..].to_string())
-                    ))).unwrap() + "\n";
-                serv_writer.write(request.as_bytes()).unwrap();
-                serv_writer.flush().unwrap();
-            },
-            _ => { 
-                input = String::new();
-                println!("Invalid request prefix") 
-            }
-        }
+        let mut serv_writer = BufWriter::new(serv_conn.try_clone().unwrap());
+        let request = serde_json::to_string(
+            &ServerRequest::Send((
+                server_addr.parse().unwrap(), 
+                MessageContent::Text(input.to_string())
+            ))).unwrap() + "\n";
+        serv_writer.write(request.as_bytes()).unwrap();
+        serv_writer.flush().unwrap();
+        input = String::new();
     }
 }
