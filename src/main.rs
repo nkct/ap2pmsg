@@ -1,6 +1,6 @@
 use std::{
     thread,
-    io::{prelude::*, BufReader, BufWriter, self, stdin},
+    io::{prelude::*, BufReader, BufWriter, self, stdin, ErrorKind},
     net::{TcpListener, TcpStream, ToSocketAddrs}, error::Error, env, process::Command, 
 };
 use serde_json;
@@ -114,8 +114,17 @@ fn listen(listener: TcpListener) {
     
         loop {
             let mut request = String::new();
-            reader.read_line(&mut request).unwrap();
-
+            if let Some(e) = reader.read_line(&mut request).err() {
+                match e.kind() {
+                    ErrorKind::ConnectionReset => {
+                        println!("{} has closed the connection.", peer_addr);
+                    }
+                    _ => {
+                        println!("Error: {:?}", e);
+                    }
+                }
+                break;
+            }
             if request.is_empty() {
                 println!("{} has closed the connection.", peer_addr);
                 break;
