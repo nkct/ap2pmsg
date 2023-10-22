@@ -1,7 +1,10 @@
 use std::{
-    thread,
+    thread::{self, JoinHandle},
     io::{prelude::*, BufReader, BufWriter, self, stdin, ErrorKind},
-    net::{TcpListener, TcpStream, ToSocketAddrs}, error::Error, env, process::Command, 
+    net::{TcpListener, ToSocketAddrs, SocketAddr, TcpStream}, 
+    error::Error, 
+    env, 
+    process::Command, 
 };
 use serde_json;
 
@@ -37,7 +40,7 @@ fn main() {
     }
 
     let listener = get_listener(serv_addr).unwrap();
-    thread::spawn(move|| {
+    let listener_thread = thread::spawn(move|| {
         listen(listener);
     });
 
@@ -68,8 +71,9 @@ fn main() {
         panic!("TODO: Running server in the background is not yet implemented")
     }
 
-    let mut exit = String::new();
-    stdin().read_line(&mut exit).unwrap();
+    listener_thread.join().unwrap();
+    println!("\nPress any key to exit");
+    stdin().read_line(&mut String::new()).unwrap();
 }
 
 fn get_listener<A: ToSocketAddrs>(addr: A) -> Result<TcpListener, Box<dyn Error>> {
@@ -93,61 +97,75 @@ fn get_listener<A: ToSocketAddrs>(addr: A) -> Result<TcpListener, Box<dyn Error>
 }
 
 fn listen(listener: TcpListener) {
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                println!("New connection: {}", stream.peer_addr().unwrap());
-                thread::spawn(move|| {
-                    handle_connection(stream)
-                });
-            }
-            Err(e) => {
-                println!("Error: {}", e);
+    let mut frontend_addr: Option<SocketAddr> = None;
+    let mut listener_thread: Option<JoinHandle<()>> = None;
+    listener.set_nonblocking(true).expect("Cannot set non-blocking");
+    for incoming in listener.incoming() {
+        if let Some(ref handle) = listener_thread {
+            if handle.is_finished() {
+                break;
             }
         }
-    }
 
-    fn handle_connection(conn: TcpStream) {
-        let peer_addr = conn.peer_addr().unwrap();
-        let mut writer = BufWriter::new(conn.try_clone().unwrap());
-        let mut reader = BufReader::new(conn.try_clone().unwrap());
-    
-        loop {
-            let mut request = String::new();
-            if let Some(e) = reader.read_line(&mut request).err() {
-                match e.kind() {
-                    ErrorKind::ConnectionReset => {
-                        println!("{} has closed the connection.", peer_addr);
-                    }
-                    _ => {
+        let frontend_conn: TcpStream;
+        if let Err(e) = incoming {
+            if e.kind() == ErrorKind::WouldBlock {
+                continue;
+            } else {
+                println!("EEROR: Cannot accept frontend connection; {}", e);
+                continue;
+            }
+        } else {
+            frontend_conn = incoming.unwrap()
+        }
+        let mut writer = BufWriter::new(frontend_conn.try_clone().unwrap());
+        let mut reader = BufReader::new(frontend_conn.try_clone().unwrap());
+
+        if frontend_addr.is_some() {
+            writer.write(format!(
+                "ER: Connection to backend refused; this backend is already serving a frontend at: {}\n", frontend_addr.unwrap()
+            ).as_bytes()).unwrap();
+            writer.flush().unwrap();
+            drop(frontend_conn);
+            continue;
+        }
+        frontend_addr = frontend_conn.peer_addr().ok();
+
+        listener_thread = Some(thread::spawn(move|| {
+            writer.write("OK: Connection to backend succesfully established\n".as_bytes()).unwrap();
+            writer.flush().unwrap();
+                
+            println!("New connection: {}", frontend_addr.unwrap());            
+            loop {
+                let mut request = String::new();
+                if let Some(e) = reader.read_line(&mut request).err() {
+                    if e.kind() == ErrorKind::ConnectionReset || request.is_empty() {
+                        println!("{} has closed the connection.", frontend_addr.unwrap());
+                    } else {
                         println!("Error: {:?}", e);
                     }
+                    break;
                 }
-                break;
-            }
-            if request.is_empty() {
-                println!("{} has closed the connection.", peer_addr);
-                break;
-            }
-
-            match serde_json::from_str::<ServerRequest>(&request) {
-                Ok(request) => {
-                    match request {
-                        ServerRequest::Send((addr, content)) => {
-                            println!("Server Request: Send({}, {:?})", addr, content)
+    
+                match serde_json::from_str::<ServerRequest>(&request) {
+                    Ok(request) => {
+                        match request {
+                            ServerRequest::Send((addr, content)) => {
+                                println!("Server Request: Send({}, {:?})", addr, content)
+                            }
                         }
+                    },
+                    Err(e) => {
+                        println!("ERROR: Invalid request \n{} \n{:#?}", e, request);
+                        writer.write(b"ERROR: Invalid request\n").unwrap();
+                        writer.flush().unwrap();
+                        continue;
                     }
-                },
-                Err(e) => {
-                    println!("ERROR: Invalid request \n{} \n{:#?}", e, request);
-                    writer.write(b"ERROR: Invalid request\n").unwrap();
-                    writer.flush().unwrap();
-                    continue;
                 }
-            }
-
-            writer.write(b"Response\n").unwrap();
-            writer.flush().unwrap();
-        } 
+    
+                writer.write(b"Response\n").unwrap();
+                writer.flush().unwrap();
+            } 
+        }));
     }
 }
