@@ -122,24 +122,16 @@ fn listen(listener: TcpListener) {
         let mut reader = BufReader::new(frontend_conn.try_clone().unwrap());
 
         if frontend_addr.is_some() {
-            let response = serde_json::to_string(
-                &BackendResponse::ConnectionEstablished(Err(format!(
-                    "Connection to backend refused; this backend is already serving a frontend at: {}\n", frontend_addr.unwrap()
-                )))
-            ).unwrap() + "\n";
-            writer.write(response.as_bytes()).unwrap();
-            writer.flush().unwrap();
+            BackendResponse::ConnectionEstablished(Err(format!(
+                "Connection to backend refused; this backend is already serving a frontend at: {}", frontend_addr.unwrap()
+            ))).write(&mut writer).unwrap();
             drop(frontend_conn);
             continue;
         }
         frontend_addr = frontend_conn.peer_addr().ok();
 
         listener_thread = Some(thread::spawn(move|| {
-            let response = serde_json::to_string(
-                &BackendResponse::ConnectionEstablished(Ok(()))
-            ).unwrap() + "\n";
-            writer.write(response.as_bytes()).unwrap();
-            writer.flush().unwrap();
+            BackendResponse::ConnectionEstablished(Ok(())).write(&mut writer).unwrap();
                 
             println!("New connection: {}", frontend_addr.unwrap());            
             loop {
