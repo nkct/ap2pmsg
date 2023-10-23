@@ -136,15 +136,17 @@ fn listen(listener: TcpListener) {
             println!("New connection: {}", frontend_addr.unwrap());            
             loop {
                 let mut request = String::new();
-                if let Some(e) = reader.read_line(&mut request).err() {
-                    if e.kind() == ErrorKind::ConnectionReset || request.is_empty() {
+                let result = reader.read_line(&mut request);
+                if result.is_err() || request.is_empty() {
+                    let e = result.err();
+                    if request.is_empty() || e.as_ref().unwrap().kind() == ErrorKind::ConnectionReset {
                         println!("{} has closed the connection.", frontend_addr.unwrap());
                     } else {
-                        println!("Error: {:?}", e);
+                        println!("Error: {:?}", e.unwrap());
                     }
                     break;
                 }
-    
+
                 match serde_json::from_str::<BackendRequest>(&request) {
                     Ok(request) => {
                         match request {
