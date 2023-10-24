@@ -16,7 +16,16 @@ fn main() {
     let mut serv_in_background = false;
     let serv_addr = "0.0.0.0:7878";
     let terminal_emulator = "xfce4-terminal";
+    let db_path = "./local_storage.db";
 
+    // initialize db
+    let db_conn  = DbConn::new(rusqlite::Connection::open(db_path).unwrap());
+    if !db_conn.table_exists("Messages").unwrap() {
+        println!("Table Messages doesn't exist, creating");
+        db_conn.table_from_struct(Message::new_text("hello", "peer")).unwrap();
+    }
+
+    // arg parsing
     if args.len() >= 2 {
         for (i, arg) in args.iter().enumerate() {
             if arg == "-f" || arg == "--frontend" {
@@ -39,11 +48,13 @@ fn main() {
         }
     }
 
+    // start listening
     let listener = get_listener(serv_addr).unwrap();
     let listener_thread = thread::spawn(move|| {
         listen(listener);
     });
 
+    // set up frontend
     match frontend_type {
         FrontendType::CLI => {
             if cfg!(debug_assertions) {

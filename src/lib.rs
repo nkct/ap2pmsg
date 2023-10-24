@@ -1,5 +1,6 @@
-use std::{net::{SocketAddr, TcpStream}, io::{BufWriter, self, Write}};
+use std::{net::{SocketAddr, TcpStream}, io::{BufWriter, self, Write}, any::type_name};
 use serde::{Serialize, Deserialize};
+use serde_json::Value;
 use time::OffsetDateTime;
 
 pub trait Writable {
@@ -70,4 +71,75 @@ impl Message {
 pub enum FrontendType {
     CLI,
     WEB,
+}
+
+pub fn get_now() -> OffsetDateTime {
+    if let Ok(time) = OffsetDateTime::now_local() {
+        return time;
+    } else {
+        OffsetDateTime::now_utc()
+    }
+}
+
+pub struct DbConn(rusqlite::Connection);
+impl DbConn {
+    pub fn new(conn: rusqlite::Connection) -> Self {
+        DbConn(conn)
+    }
+    pub fn table_exists(&self, table_name: &str) -> rusqlite::Result<bool, > {
+        Ok(self.0
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = :table_name;")?
+            .execute([table_name])? != 0
+        )
+    }
+    pub fn table_from_struct<T: Serialize>(&self, t: T) -> Result<(), Box<dyn std::error::Error>> {
+        fn destructure(object: &serde_json::Map<String, Value>) -> String {
+            let mut columns = String::new();
+            for (field, value) in object {
+                let datatype = match value {
+                    Value::Bool(_)   => { "INTEGER".to_owned() }
+                    Value::String(_) => { "TEXT".to_owned()    },
+                    Value::Number(_) => { "INTEGER".to_owned() },
+                    Value::Null      => { "NULL".to_owned()    },
+                    Value::Object(object) => {
+                        let (field, _) = object.into_iter().next().unwrap();
+                        let datatype = match field.as_str() {
+                            "Text" => { "TEXT".to_owned() },
+                            _ => { panic!("ERROR: encountered unsupported message content type") }
+                        };
+                        columns.push_str("content_type TEXT, ");
+                        columns.push_str(&format!("content {}, ", &datatype));
+                        continue;
+                    }
+                    _ => {
+                        panic!("ERROR: encountered unsupported datatype");
+                    }
+                };
+                columns.push_str(&format!("{} {}, ", field, &datatype));
+            }
+            let last_comma = columns.rfind(",").unwrap();
+            return String::from(columns[..last_comma].to_owned() + &columns[last_comma + 1..]);
+        }
+
+        let mut columns = String::new();
+        if let Some(object) = serde_json::json!(t).as_object() {
+            columns.push_str(&destructure(object));
+        } else {
+            return Err("supplied struct is not an object".into());
+        }
+        
+        let mut typename = type_name::<T>();
+        if typename.starts_with("ap2pmsg::") {
+            typename = &typename[9..];
+        }
+
+        let query = &format!("CREATE TABLE {}s ({})", typename, columns);
+        self.0.execute(query, ())?;
+
+        Ok(())
+    }
+}
+
+fn type_of<T>(val: &T) -> &str{
+    type_name::<T>()
 }
