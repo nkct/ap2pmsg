@@ -25,31 +25,42 @@ pub enum BackendResponse {
 }
 impl Writable for BackendResponse {}
 
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum MessageContent {
     Text(String),
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct MessageMetadata {
-    sender: SocketAddr,
-    time_sent: OffsetDateTime,
-}
-impl MessageMetadata {
-    pub fn new(sender: SocketAddr) -> Self {
-        Self { sender, time_sent: OffsetDateTime::now_utc() }
-    }
-}
-
+// sender_id is unique to each connection
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Message {
-    metadata: MessageMetadata,
+    id: u64,
+    sender_id: u64,
+    recepient_id: u64,
+    recieved: bool,
+    time_sent: OffsetDateTime,
+    time_recieved: Option<OffsetDateTime>,
     content: MessageContent,
 }
 impl Message {
-    pub fn new_text(content: &str, sender: SocketAddr) -> Self {
+    fn get_new_message_id() -> u64 {
+        1
+    }
+    fn get_sender(recepient_id: u64) -> u64 {
+        1
+    }
+    fn get_recepient_id(recepient_name: &str) -> u64 {
+        1
+    }
+    pub fn new_text(content: &str, recepient_name: &str) -> Self {
+        let recepient_id = Message::get_recepient_id(recepient_name);
         Message {
-            metadata: MessageMetadata::new(sender),
+            id: Message::get_new_message_id(),
+            sender_id: Message::get_sender(recepient_id),
+            recepient_id,
+            recieved: false,
+            time_sent: get_now(),
+            time_recieved: None,
             content: MessageContent::Text(content.to_owned()),
         }
     }
