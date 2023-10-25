@@ -89,7 +89,7 @@ impl DbConn {
     pub fn table_exists(&self, table_name: &str) -> rusqlite::Result<bool, > {
         Ok(self.0
             .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = :table_name;")?
-            .execute([table_name])? != 0
+            .query([table_name])?.next().unwrap().is_some()
         )
     }
     pub fn table_from_struct<T: Serialize>(&self, t: T) -> Result<(), Box<dyn std::error::Error>> {
@@ -138,8 +138,4 @@ impl DbConn {
 
         Ok(())
     }
-}
-
-fn type_of<T>(val: &T) -> &str{
-    type_name::<T>()
 }
