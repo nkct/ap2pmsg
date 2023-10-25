@@ -24,6 +24,10 @@ fn main() {
         println!("Table Messages doesn't exist, creating");
         db_conn.table_from_struct(Message::new_text("hello", "peer")).unwrap();
     }
+    if !db_conn.table_exists("Connections").unwrap() {
+        println!("Table Connections doesn't exist, creating");
+        db_conn.table_from_struct(Connection::new("peer")).unwrap();
+    }
 
     // arg parsing
     if args.len() >= 2 {

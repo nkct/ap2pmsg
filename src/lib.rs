@@ -1,4 +1,4 @@
-use std::{net::{SocketAddr, TcpStream}, io::{BufWriter, self, Write}, any::type_name};
+use std::{net::{SocketAddr, TcpStream, IpAddr, Ipv4Addr}, io::{BufWriter, self, Write}, any::type_name};
 use serde::{Serialize, Deserialize};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -63,6 +63,38 @@ impl Message {
             time_sent: get_now(),
             time_recieved: None,
             content: MessageContent::Text(content.to_owned()),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Connection {
+    peer_id: u64,
+    peer_name: String,
+    peer_addr: SocketAddr,
+    online: bool,
+    time_established: OffsetDateTime,
+    self_id: u64,
+}
+impl Connection {
+    fn get_peer_id(peer_name: &str) -> u64 {
+        1
+    }
+    fn get_peer_addr(peer_id: u64) -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080)
+    }
+    fn get_self_id(peer_id: u64) -> u64 {
+        1
+    }
+    pub fn new(peer_name: &str) -> Self {
+        let peer_id = Connection::get_peer_id(peer_name);
+        Connection {
+            peer_id,
+            peer_name: peer_name.to_owned(),
+            peer_addr: Connection::get_peer_addr(peer_id),
+            online: false,
+            time_established: get_now(),
+            self_id: Connection::get_self_id(peer_id),
         }
     }
 }
