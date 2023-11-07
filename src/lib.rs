@@ -53,6 +53,17 @@ impl Message {
     fn get_recepient_id(recepient_name: &str) -> u64 {
         1
     }
+    pub fn empty() -> Self {
+        Message {
+            id: 0,
+            sender_id: 0,
+            recepient_id: 0,
+            recieved: false,
+            time_sent: get_now(),
+            time_recieved: None,
+            content: MessageContent::Text(String::new()),
+        }
+    }
     pub fn new_text(content: &str, recepient_name: &str) -> Self {
         let recepient_id = Message::get_recepient_id(recepient_name);
         Message {
@@ -85,6 +96,16 @@ impl Connection {
     }
     fn get_self_id(peer_id: u64) -> u64 {
         1
+    }
+    pub fn empty() -> Self {
+        Connection {
+            peer_id: 0,
+            peer_name: String::new(),
+            peer_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
+            online: false,
+            time_established: get_now(),
+            self_id: 0,
+        }
     }
     pub fn new(peer_name: &str) -> Self {
         let peer_id = Connection::get_peer_id(peer_name);

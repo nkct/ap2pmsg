@@ -22,11 +22,11 @@ fn main() {
     let db_conn  = DbConn::new(rusqlite::Connection::open(db_path).unwrap());
     if !db_conn.table_exists("Messages").unwrap() {
         println!("Table Messages doesn't exist, creating");
-        db_conn.table_from_struct(Message::new_text("hello", "peer")).unwrap();
+        db_conn.table_from_struct(Message::empty()).unwrap();
     }
     if !db_conn.table_exists("Connections").unwrap() {
         println!("Table Connections doesn't exist, creating");
-        db_conn.table_from_struct(Connection::new("peer")).unwrap();
+        db_conn.table_from_struct(Connection::empty()).unwrap();
     }
 
     // arg parsing
