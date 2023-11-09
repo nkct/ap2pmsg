@@ -1,4 +1,5 @@
-use std::{net::{SocketAddr, TcpStream, IpAddr, Ipv4Addr}, io::{BufWriter, self, Write}, any::type_name};
+use std::{net::{SocketAddr, TcpStream, IpAddr, Ipv4Addr}, io::{BufWriter, self, Write}, any::type_name, error::Error, fmt::Display};
+use rusqlite::Row;
 use serde::{Serialize, Deserialize};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -35,41 +36,31 @@ pub enum MessageContent {
 // sender_id is unique to each connection
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Message {
-    id: u64,
-    sender_id: u64,
-    recepient_id: u64,
+    message_id: u64,
+    self_id: u64,
+    peer_id: u64,
     recieved: bool,
     time_sent: OffsetDateTime,
     time_recieved: Option<OffsetDateTime>,
     content: MessageContent,
 }
 impl Message {
-    fn get_new_message_id() -> u64 {
-        1
-    }
-    fn get_sender(recepient_id: u64) -> u64 {
-        1
-    }
-    fn get_recepient_id(recepient_name: &str) -> u64 {
-        1
-    }
     pub fn empty() -> Self {
         Message {
-            id: 0,
-            sender_id: 0,
-            recepient_id: 0,
+            message_id: 0,
+            self_id: 0,
+            peer_id: 0,
             recieved: false,
             time_sent: get_now(),
             time_recieved: None,
             content: MessageContent::Text(String::new()),
         }
     }
-    pub fn new_text(content: &str, recepient_name: &str) -> Self {
-        let recepient_id = Message::get_recepient_id(recepient_name);
+    pub fn new_text(conn: DbConn, content: &str, peer_id: u64) -> Self {
         Message {
-            id: Message::get_new_message_id(),
-            sender_id: Message::get_sender(recepient_id),
-            recepient_id,
+            message_id: conn.get_new_message_id().unwrap(),
+            self_id: conn.get_self_id(peer_id).unwrap(),
+            peer_id,
             recieved: false,
             time_sent: get_now(),
             time_recieved: None,
