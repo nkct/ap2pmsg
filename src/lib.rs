@@ -140,6 +140,18 @@ impl DbConn {
         )
     }
 
+    fn get_new_message_id(&self) -> rusqlite::Result<u64> {
+        Ok(if let Some(row) = self.0
+            .prepare("SELECT id FROM Messages ORDER BY id DESC LIMIT 1;")?
+            .query([])?.next()? {
+                // for some reason i've had trouble simply incrementing this
+                let mut r = row.get(0)?;
+                r += 1;
+                r
+        } else {
+            0
+        })
+    }
     fn get_self_id(&self, peer_id: u64) -> Result<u64, Box<dyn Error>> {
         let mut stmt = self.0.prepare("SELECT self_id FROM Connections WHERE peer_id = :peer_id;")?;
         let mut results = stmt.query_map([peer_id], |row| {row.get::<usize, u64>(0)})?;
