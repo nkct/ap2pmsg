@@ -92,8 +92,8 @@ impl Connection {
     pub fn new(conn: DbConn, peer_id: u64) -> Self {
         Connection {
             peer_id,
-            peer_name: conn.get_peer_name(peer_id),
-            peer_addr: conn.get_peer_addr(peer_id),
+            peer_name: conn.get_peer_name(peer_id).unwrap(),
+            peer_addr: conn.get_peer_addr(peer_id).unwrap(),
             online: false,
             time_established: get_now(),
             self_id: conn.get_self_id(peer_id).unwrap(),
@@ -166,13 +166,36 @@ impl DbConn {
         } else {
             return Err(Box::new(DbErr::NoResults));
         }
-        
     }
-    fn get_peer_name(&self, peer_id: u64) -> String {
-        String::new()
+    fn get_peer_name(&self, peer_id: u64) -> Result<String, Box<dyn Error>> {
+        let mut stmt = self.0.prepare("SELECT peer_name FROM Connections WHERE peer_id = :peer_id;")?;
+        let mut results = stmt.query_map([peer_id], |row| {row.get::<usize, String>(0)})?;
+
+        if let Some(peer_name) = results.next() {
+            // the query returned multiple rows
+            if results.next().is_some() {
+                return Err(Box::new(DbErr::IdNotUniqe));
+            }
+
+            return Ok(peer_name?);
+        } else {
+            return Err(Box::new(DbErr::NoResults));
+        }
     }
-    fn get_peer_addr(&self, peer_id: u64) -> SocketAddr {
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080)
+    fn get_peer_addr(&self, peer_id: u64) -> Result<SocketAddr, Box<dyn Error>> {
+        let mut stmt = self.0.prepare("SELECT peer_addr FROM Connections WHERE peer_id = :peer_id;")?;
+        let mut results = stmt.query_map([peer_id], |row| {row.get::<usize, String>(0)})?;
+
+        if let Some(peer_addr) = results.next() {
+            // the query returned multiple rows
+            if results.next().is_some() {
+                return Err(Box::new(DbErr::IdNotUniqe));
+            }
+
+            return Ok(peer_addr?.parse()?);
+        } else {
+            return Err(Box::new(DbErr::NoResults));
+        }
     }
 
     pub fn table_from_struct<T: Serialize>(&self, t: T) -> Result<(), Box<dyn std::error::Error>> {
