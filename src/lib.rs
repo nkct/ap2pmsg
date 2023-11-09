@@ -79,15 +79,6 @@ pub struct Connection {
     self_id: u64,
 }
 impl Connection {
-    fn get_peer_id(peer_name: &str) -> u64 {
-        1
-    }
-    fn get_peer_addr(peer_id: u64) -> SocketAddr {
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080)
-    }
-    fn get_self_id(peer_id: u64) -> u64 {
-        1
-    }
     pub fn empty() -> Self {
         Connection {
             peer_id: 0,
@@ -98,15 +89,14 @@ impl Connection {
             self_id: 0,
         }
     }
-    pub fn new(peer_name: &str) -> Self {
-        let peer_id = Connection::get_peer_id(peer_name);
+    pub fn new(conn: DbConn, peer_id: u64) -> Self {
         Connection {
             peer_id,
-            peer_name: peer_name.to_owned(),
-            peer_addr: Connection::get_peer_addr(peer_id),
+            peer_name: conn.get_peer_name(peer_id),
+            peer_addr: conn.get_peer_addr(peer_id),
             online: false,
             time_established: get_now(),
-            self_id: Connection::get_self_id(peer_id),
+            self_id: conn.get_self_id(peer_id).unwrap(),
         }
     }
 }
@@ -125,17 +115,54 @@ pub fn get_now() -> OffsetDateTime {
     }
 }
 
+#[derive(Debug)]
+enum DbErr {
+    IdNotUniqe,
+    NoResults
+}
+impl Display for DbErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self)
+    }
+}
+impl Error for DbErr {}
+
+// look into replacing sqlite with nosql
 pub struct DbConn(rusqlite::Connection);
 impl DbConn {
     pub fn new(conn: rusqlite::Connection) -> Self {
         DbConn(conn)
     }
-    pub fn table_exists(&self, table_name: &str) -> rusqlite::Result<bool, > {
+    pub fn table_exists(&self, table_name: &str) -> rusqlite::Result<bool> {
         Ok(self.0
             .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = :table_name;")?
             .query([table_name])?.next().unwrap().is_some()
         )
     }
+
+    fn get_self_id(&self, peer_id: u64) -> Result<u64, Box<dyn Error>> {
+        let mut stmt = self.0.prepare("SELECT self_id FROM Connections WHERE peer_id = :peer_id;")?;
+        let mut results = stmt.query_map([peer_id], |row| {row.get::<usize, u64>(0)})?;
+
+        if let Some(id) = results.next() {
+            // the query returned multiple rows
+            if results.next().is_some() {
+                return Err(Box::new(DbErr::IdNotUniqe));
+            }
+
+            return Ok(id?);
+        } else {
+            return Err(Box::new(DbErr::NoResults));
+        }
+        
+    }
+    fn get_peer_name(&self, peer_id: u64) -> String {
+        String::new()
+    }
+    fn get_peer_addr(&self, peer_id: u64) -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080)
+    }
+
     pub fn table_from_struct<T: Serialize>(&self, t: T) -> Result<(), Box<dyn std::error::Error>> {
         fn destructure(object: &serde_json::Map<String, Value>) -> String {
             let mut columns = String::new();
