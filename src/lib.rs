@@ -71,31 +71,21 @@ impl Message {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Connection {
     peer_id: u64,
+    self_id: u64,
     peer_name: String,
     peer_addr: SocketAddr,
     online: bool,
     time_established: OffsetDateTime,
-    self_id: u64,
 }
 impl Connection {
-    pub fn empty() -> Self {
-        Connection {
-            peer_id: 0,
-            peer_name: String::new(),
-            peer_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
-            online: false,
-            time_established: get_now(),
-            self_id: 0,
-        }
-    }
-    pub fn new(conn: DbConn, peer_id: u64) -> Self {
+    pub fn new(peer_id: u64, self_id: u64, peer_name: String, peer_addr: SocketAddr) -> Self {
         Connection {
             peer_id,
-            peer_name: conn.get_peer_name(peer_id).unwrap(),
-            peer_addr: conn.get_peer_addr(peer_id).unwrap(),
-            online: false,
+            self_id,
+            peer_name,
+            peer_addr,
+            online: true,
             time_established: get_now(),
-            self_id: conn.get_self_id(peer_id).unwrap(),
         }
     }
 }
@@ -139,7 +129,7 @@ impl DbConn {
         )
     }
 
-    fn get_new_message_id(&self) -> rusqlite::Result<u64> {
+    fn _get_new_message_id(&self) -> rusqlite::Result<u64> {
         Ok(if let Some(row) = self.0
             .prepare("SELECT id FROM Messages ORDER BY id DESC LIMIT 1;")?
             .query([])?.next()? {
@@ -151,7 +141,7 @@ impl DbConn {
             0
         })
     }
-    fn get_self_id(&self, peer_id: u64) -> Result<u64, Box<dyn Error>> {
+    fn _get_self_id(&self, peer_id: u64) -> Result<u64, Box<dyn Error>> {
         let mut stmt = self.0.prepare("SELECT self_id FROM Connections WHERE peer_id = :peer_id;")?;
         let mut results = stmt.query_map([peer_id], |row| {row.get::<usize, u64>(0)})?;
 
@@ -166,7 +156,7 @@ impl DbConn {
             return Err(Box::new(DbErr::NoResults));
         }
     }
-    fn get_peer_name(&self, peer_id: u64) -> Result<String, Box<dyn Error>> {
+    fn _get_peer_name(&self, peer_id: u64) -> Result<String, Box<dyn Error>> {
         let mut stmt = self.0.prepare("SELECT peer_name FROM Connections WHERE peer_id = :peer_id;")?;
         let mut results = stmt.query_map([peer_id], |row| {row.get::<usize, String>(0)})?;
 
@@ -181,7 +171,7 @@ impl DbConn {
             return Err(Box::new(DbErr::NoResults));
         }
     }
-    fn get_peer_addr(&self, peer_id: u64) -> Result<SocketAddr, Box<dyn Error>> {
+    fn _get_peer_addr(&self, peer_id: u64) -> Result<SocketAddr, Box<dyn Error>> {
         let mut stmt = self.0.prepare("SELECT peer_addr FROM Connections WHERE peer_id = :peer_id;")?;
         let mut results = stmt.query_map([peer_id], |row| {row.get::<usize, String>(0)})?;
 
@@ -218,12 +208,22 @@ impl DbConn {
             connection_id INTEGER,
             peer_id INTEGER NOT NULL UNIQUE, 
             self_id INTEGER NOT NULL, 
-            peer_name TEXT, 
-            peer_addr TEXT, 
+            peer_name TEXT NOT NULL, 
+            peer_addr TEXT NOT NULL, 
             online INTEGER DEFAULT 1, 
             time_established TEXT DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (connection_id)
         );", ())?)
+    }
+
+    fn insert_connection(&self, connection: Connection) -> Result<usize, Box<dyn std::error::Error>> {
+        // for the sake of brevity
+        let c = connection;
+        Ok(self.0.execute("
+            INSERT INTO Connections (peer_id, self_id, peer_name, peer_addr, online, time_established) VALUES 
+            (?1, ?2, ?3, ?4, ?5, ?6);", 
+            (c.peer_id, c.self_id, c.peer_name, c.peer_addr.to_string(), c.online, c.time_established.to_string())
+        )?)
     }
 
     pub fn _table_from_struct<T: Serialize>(&self, t: T) -> Result<(), Box<dyn std::error::Error>> {
