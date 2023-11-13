@@ -1,5 +1,4 @@
 use std::{net::{SocketAddr, TcpStream, IpAddr, Ipv4Addr}, io::{BufWriter, self, Write}, any::type_name, error::Error, fmt::Display};
-use rusqlite::Row;
 use serde::{Serialize, Deserialize};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -198,7 +197,36 @@ impl DbConn {
         }
     }
 
-    pub fn table_from_struct<T: Serialize>(&self, t: T) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn create_messages_table(&self) -> Result<usize, Box<dyn std::error::Error>> {
+        Ok(self.0.execute("
+        CREATE TABLE Messages (
+            message_id INTEGER, 
+            connection_id INTEGER,
+            recieved INTEGER DEFAULT 0, 
+            time_recieved TEXT, 
+            time_sent TEXT DEFAULT CURRENT_TIMESTAMP, 
+            content_type TEXT NOT NULL, 
+            content BLOB, 
+            PRIMARY KEY (message_id),
+            FOREIGN KEY (connection_id) REFERENCES Connections(connection_id)
+        );", ())?)
+    }
+
+    pub fn create_connections_table(&self) -> Result<usize, Box<dyn std::error::Error>> {
+        Ok(self.0.execute("
+        CREATE TABLE Connections (
+            connection_id INTEGER,
+            peer_id INTEGER NOT NULL UNIQUE, 
+            self_id INTEGER NOT NULL, 
+            peer_name TEXT, 
+            peer_addr TEXT, 
+            online INTEGER DEFAULT 1, 
+            time_established TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (connection_id)
+        );", ())?)
+    }
+
+    pub fn _table_from_struct<T: Serialize>(&self, t: T) -> Result<(), Box<dyn std::error::Error>> {
         fn destructure(object: &serde_json::Map<String, Value>) -> String {
             let mut columns = String::new();
             for (field, value) in object {

@@ -20,13 +20,13 @@ fn main() {
 
     // initialize db
     let db_conn  = DbConn::new(rusqlite::Connection::open(db_path).unwrap());
-    if !db_conn.table_exists("Messages").unwrap() {
-        println!("Table Messages doesn't exist, creating");
-        db_conn.table_from_struct(Message::empty()).unwrap();
-    }
     if !db_conn.table_exists("Connections").unwrap() {
         println!("Table Connections doesn't exist, creating");
-        db_conn.table_from_struct(Connection::empty()).unwrap();
+        db_conn.create_connections_table().unwrap();
+    }
+    if !db_conn.table_exists("Messages").unwrap() {
+        println!("Table Messages doesn't exist, creating");
+        db_conn.create_messages_table().unwrap();
     }
 
     // arg parsing

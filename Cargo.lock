@@ -31,13 +31,12 @@ checksum = "0942ffc6dcaadf03badf6e6a2d0228460359d5e34b57ccdc720b7382dfbd5ec5"
 
 [[package]]
 name = "ap2pmsg"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "regex",
  "rusqlite",
  "serde",
  "serde_json",
- "serde_rusqlite",
  "time",
 ]
 
@@ -242,16 +241,6 @@ checksum = "6b420ce6e3d8bd882e9b243c6eed35dbc9a6110c9769e74b584e0d68d1f20c65"
 dependencies = [
  "itoa",
  "ryu",
- "serde",
-]
-
-[[package]]
-name = "serde_rusqlite"
-version = "0.33.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d47abf7a442693a91719a07972deed78a2a4a8cb418df8d454eee656c77cb8af"
-dependencies = [
- "rusqlite",
  "serde",
 ]
 
