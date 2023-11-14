@@ -143,74 +143,15 @@ impl DbConn {
             .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = :table_name;")?
             .query([table_name])?.next().unwrap().is_some()
         )
-    }
-
-    fn _get_new_message_id(&self) -> rusqlite::Result<u64> {
-        Ok(if let Some(row) = self.0
-            .prepare("SELECT id FROM Messages ORDER BY id DESC LIMIT 1;")?
-            .query([])?.next()? {
-                // for some reason i've had trouble simply incrementing this
-                let mut r = row.get(0)?;
-                r += 1;
-                r
-        } else {
-            0
-        })
-    }
-    fn _get_self_id(&self, peer_id: u64) -> Result<u64, Box<dyn Error>> {
-        let mut stmt = self.0.prepare("SELECT self_id FROM Connections WHERE peer_id = :peer_id;")?;
-        let mut results = stmt.query_map([peer_id], |row| {row.get::<usize, u64>(0)})?;
-
-        if let Some(id) = results.next() {
-            // the query returned multiple rows
-            if results.next().is_some() {
-                return Err(Box::new(DbErr::IdNotUniqe));
-            }
-
-            return Ok(id?);
-        } else {
-            return Err(Box::new(DbErr::NoResults));
-        }
-    }
-    fn _get_peer_name(&self, peer_id: u64) -> Result<String, Box<dyn Error>> {
-        let mut stmt = self.0.prepare("SELECT peer_name FROM Connections WHERE peer_id = :peer_id;")?;
-        let mut results = stmt.query_map([peer_id], |row| {row.get::<usize, String>(0)})?;
-
-        if let Some(peer_name) = results.next() {
-            // the query returned multiple rows
-            if results.next().is_some() {
-                return Err(Box::new(DbErr::IdNotUniqe));
-            }
-
-            return Ok(peer_name?);
-        } else {
-            return Err(Box::new(DbErr::NoResults));
-        }
-    }
-    fn _get_peer_addr(&self, peer_id: u64) -> Result<SocketAddr, Box<dyn Error>> {
-        let mut stmt = self.0.prepare("SELECT peer_addr FROM Connections WHERE peer_id = :peer_id;")?;
-        let mut results = stmt.query_map([peer_id], |row| {row.get::<usize, String>(0)})?;
-
-        if let Some(peer_addr) = results.next() {
-            // the query returned multiple rows
-            if results.next().is_some() {
-                return Err(Box::new(DbErr::IdNotUniqe));
-            }
-
-            return Ok(peer_addr?.parse()?);
-        } else {
-            return Err(Box::new(DbErr::NoResults));
-        }
-    }
+    }    
 
     pub fn create_messages_table(&self) -> Result<usize, Box<dyn std::error::Error>> {
         Ok(self.0.execute("
         CREATE TABLE Messages (
             message_id INTEGER, 
             connection_id INTEGER,
-            recieved INTEGER DEFAULT 0, 
-            time_recieved TEXT, 
             time_sent TEXT DEFAULT CURRENT_TIMESTAMP, 
+            time_recieved TEXT, 
             content_type TEXT NOT NULL, 
             content BLOB, 
             PRIMARY KEY (message_id),
@@ -242,50 +183,7 @@ impl DbConn {
         )?)
     }
 
-    pub fn _table_from_struct<T: Serialize>(&self, t: T) -> Result<(), Box<dyn std::error::Error>> {
-        fn destructure(object: &serde_json::Map<String, Value>) -> String {
-            let mut columns = String::new();
-            for (field, value) in object {
-                let datatype = match value {
-                    Value::Bool(_)   => { "INTEGER".to_owned() }
-                    Value::String(_) => { "TEXT".to_owned()    },
-                    Value::Number(_) => { "INTEGER".to_owned() },
-                    Value::Null      => { "NULL".to_owned()    },
-                    Value::Object(object) => {
-                        let (field, _) = object.into_iter().next().unwrap();
-                        let datatype = match field.as_str() {
-                            "Text" => { "TEXT".to_owned() },
-                            _ => { panic!("ERROR: encountered unsupported message content type") }
-                        };
-                        columns.push_str("content_type TEXT, ");
-                        columns.push_str(&format!("content {}, ", &datatype));
-                        continue;
-                    }
-                    _ => {
-                        panic!("ERROR: encountered unsupported datatype");
-                    }
-                };
-                columns.push_str(&format!("{} {}, ", field, &datatype));
-            }
-            let last_comma = columns.rfind(",").unwrap();
-            return String::from(columns[..last_comma].to_owned() + &columns[last_comma + 1..]);
-        }
 
-        let mut columns = String::new();
-        if let Some(object) = serde_json::json!(t).as_object() {
-            columns.push_str(&destructure(object));
-        } else {
-            return Err("supplied struct is not an object".into());
         }
         
-        let mut typename = type_name::<T>();
-        if typename.starts_with("ap2pmsg::") {
-            typename = &typename[9..];
-        }
-
-        let query = &format!("CREATE TABLE {}s ({})", typename, columns);
-        self.0.execute(query, ())?;
-
-        Ok(())
-    }
 }
