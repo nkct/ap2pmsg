@@ -1,7 +1,6 @@
-use std::{net::{SocketAddr, TcpStream, IpAddr, Ipv4Addr}, io::{BufWriter, self, Write}, any::type_name, error::Error, fmt::Display};
+use std::{net::{SocketAddr, TcpStream}, io::{BufWriter, self, Write}, error::Error, fmt::Display, string};
 use serde::{Serialize, Deserialize};
-use serde_json::Value;
-use time::OffsetDateTime;
+use time::{OffsetDateTime};
 
 pub trait Writable {
     fn write(&self, writer: &mut BufWriter<TcpStream>) -> Result<(), io::Error> where Self: Serialize {
@@ -105,9 +104,11 @@ pub fn get_now() -> OffsetDateTime {
 }
 
 #[derive(Debug)]
-enum DbErr {
-    IdNotUniqe,
-    NoResults
+pub enum DbErr {
+    SqlError(rusqlite::Error),
+    TimeError(time::Error),
+    UtfError(string::FromUtf8Error),
+    InvalidMessageContentType,
 }
 impl Display for DbErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -115,6 +116,21 @@ impl Display for DbErr {
     }
 }
 impl Error for DbErr {}
+impl From<rusqlite::Error> for DbErr {
+    fn from(value: rusqlite::Error) -> Self {
+        DbErr::SqlError(value)
+    }
+}
+impl From<time::Error> for DbErr {
+    fn from(value: time::Error) -> Self {
+        DbErr::TimeError(value)
+    }
+}
+impl From<string::FromUtf8Error> for DbErr {
+    fn from(value: string::FromUtf8Error) -> Self {
+        DbErr::UtfError(value)
+    }
+}
 
 // look into replacing sqlite with nosql
 pub struct DbConn(rusqlite::Connection);
