@@ -37,33 +37,14 @@ pub struct Message {
     message_id: u64,
     self_id: u64,
     peer_id: u64,
-    recieved: bool,
     time_sent: OffsetDateTime,
     time_recieved: Option<OffsetDateTime>,
     content: MessageContent,
 }
 impl Message {
-    pub fn empty() -> Self {
-        Message {
-            message_id: 0,
-            self_id: 0,
-            peer_id: 0,
-            recieved: false,
-            time_sent: get_now(),
-            time_recieved: None,
-            content: MessageContent::Text(String::new()),
-        }
-    }
-    pub fn new_text(conn: DbConn, content: &str, peer_id: u64) -> Self {
-        Message {
-            message_id: conn.get_new_message_id().unwrap(),
-            self_id: conn.get_self_id(peer_id).unwrap(),
-            peer_id,
-            recieved: false,
-            time_sent: get_now(),
-            time_recieved: None,
-            content: MessageContent::Text(content.to_owned()),
-        }
+    pub fn new(conn: &DbConn, peer_id: u64, content: MessageContent) -> Self {
+        let message_id = conn.insert_message(peer_id, content).unwrap();
+        conn.get_message(message_id).unwrap()
     }
 }
 
@@ -184,6 +165,64 @@ impl DbConn {
     }
 
 
+    pub fn insert_message(&self, peer_id: u64, content: MessageContent) -> Result<u64, Box<dyn std::error::Error>> {
+        let content_type: &str;
+        let blob: Vec<u8>;
+        match content {
+            MessageContent::Text(content) => {
+                content_type = "TEXT";
+                blob = content.into();
+            }
         }
+        self.0.execute("
+        INSERT INTO Messages (connection_id, time_recieved, content_type, content) VALUES 
+        ((SELECT connection_id FROM Connections WHERE peer_id == ?1), NULL, ?2, ?3)", (peer_id, content_type, blob))?;
         
+        let mut stmt = self.0.prepare("SELECT message_id FROM Messages ORDER BY message_id LIMIT 1;")?;
+        let mut results = stmt.query_map((), |row| {row.get::<usize, u64>(0)})?;
+        Ok(results.next().unwrap()?)
+    }
+
+    pub fn get_message(&self, message_id: u64) -> Result<Message, DbErr> {
+        let mut stmt = self.0.prepare("
+            SELECT message_id, peer_id, self_id, time_sent, time_recieved, content_type, content FROM Messages 
+            NATURAL JOIN Connections
+            WHERE message_id == 1?
+        ;")?;
+        let values = stmt.query_map([message_id], |row| {
+            Ok((
+                row.get::<usize, u64>(0)?,
+                row.get::<usize, u64>(1)?,
+                row.get::<usize, u64>(2)?,
+                row.get::<usize, String>(3)?,
+                row.get::<usize, Option<String>>(4)?,
+                row.get::<usize, String>(5)?,
+                row.get::<usize, Vec<u8>>(6)?,
+            ))
+        })?.next().unwrap()?;
+
+        let datetime_format =  &time::format_description::parse(
+            "[year]-[month]-[day] [hour]:[minute]:[second]"
+        ).unwrap();
+
+        let content = match values.5.as_str() {
+            "TEXT" => {
+                MessageContent::Text(String::from_utf8(values.6)?)
+            }
+            _ => {
+                return Err(DbErr::InvalidMessageContentType)?;
+            }
+        };
+
+        Ok(Message {
+            message_id: values.0,
+            peer_id: values.1,
+            self_id: values.2,
+            time_sent: OffsetDateTime::parse(&values.3, datetime_format).unwrap(),
+            time_recieved: values.4.map(|time_recieved| {
+                OffsetDateTime::parse(&time_recieved, datetime_format).unwrap()
+            }),
+            content,
+        })
+    }    
 }
