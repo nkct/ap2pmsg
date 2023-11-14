@@ -154,7 +154,7 @@ impl DbConn {
         );", ())?)
     }
 
-    fn insert_connection(&self, connection: Connection) -> Result<usize, Box<dyn std::error::Error>> {
+    pub fn insert_connection(&self, connection: Connection) -> Result<usize, Box<dyn std::error::Error>> {
         // for the sake of brevity
         let c = connection;
         Ok(self.0.execute("
@@ -164,6 +164,35 @@ impl DbConn {
         )?)
     }
 
+    pub fn get_connection(&self, connection_id: u64) -> Result<Connection, DbErr> {
+        let mut stmt = self.0.prepare("
+            SELECT peer_id, self_id, peer_name, peer_addr, online, time_established FROM Connections 
+            WHERE connection_id == 1?
+        ;")?;
+        let values = stmt.query_map([connection_id], |row| {
+            Ok((
+                row.get::<usize, u64>(0)?,
+                row.get::<usize, u64>(1)?,
+                row.get::<usize, String>(2)?,
+                row.get::<usize, String>(3)?,
+                row.get::<usize, bool>(4)?,
+                row.get::<usize, String>(5)?,
+            ))
+        })?.next().unwrap()?;
+
+        let datetime_format =  &time::format_description::parse(
+            "[year]-[month]-[day] [hour]:[minute]:[second]"
+        ).unwrap();
+
+        Ok(Connection {
+            peer_id: values.0,
+            self_id: values.1,
+            peer_name: values.2,
+            peer_addr: values.3.parse().unwrap(),
+            online: values.4,
+            time_established: OffsetDateTime::parse(&values.5, datetime_format).unwrap(),
+        })
+    }
 
     pub fn insert_message(&self, peer_id: u64, content: MessageContent) -> Result<u64, Box<dyn std::error::Error>> {
         let content_type: &str;
