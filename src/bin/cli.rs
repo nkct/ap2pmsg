@@ -1,5 +1,11 @@
-use std::{io::{stdin, BufWriter, prelude::*, BufReader}, net::TcpStream, env};
+use std::{io::{stdin, BufWriter, prelude::*, BufReader, stdout}, net::TcpStream, env};
 use ap2pmsg::*;
+
+enum InputMode {
+    Message,
+    AddConnection,
+    SelectConnection,
+}
 
 fn main() {
     let args: Vec<_> = env::args().collect();
@@ -24,18 +30,79 @@ fn main() {
         panic!("ERROR: Couldn't establish connection with backend; Invalid backend response")
     }
 
-    let mut input = String::new();
-    loop {
-        println!("Enter request to backend: ");
-        stdin().read_line(&mut input).unwrap();
+    let mut peer_conn = None;
 
-        let request = serde_json::to_string(
-            &BackendRequest::Send((
-                backend_addr.parse().unwrap(), 
-                MessageContent::Text(input.to_string())
-            ))).unwrap() + "\n";
-        serv_writer.write(request.as_bytes()).unwrap();
-        serv_writer.flush().unwrap();
-        input = String::new();
+    let mut input;
+    let mut input_mode = InputMode::SelectConnection;
+    loop {
+        match input_mode {
+            InputMode::SelectConnection => {
+                let request = serde_json::to_string(
+                    &BackendRequest::ListConnections).unwrap() + "\n";
+                serv_writer.write(request.as_bytes()).unwrap();
+                serv_writer.flush().unwrap();
+
+                let mut response = String::new();
+                serv_reader.read_line(&mut response).unwrap();
+                if let Ok(BackendResponse::ConnectionsListed(connections)) = serde_json::from_str::<BackendResponse>(&response) {
+                    let mut index = 0;
+                    if connections.is_empty() {
+                        println!("No connections");
+                    }
+                    for conn in &connections {
+                        println!("{}) {}: {}", index, conn.peer_name, conn.peer_addr);
+                        index += 1;
+                    }
+                    println!("Type '+' to add a connection");
+
+                    loop {
+                        print!("\nSelect device: ");
+                        stdout().flush().unwrap();
+                        input = String::new();
+                        stdin().read_line(&mut input).unwrap();
+                        
+                        if let Ok(i) = input.trim().parse::<usize>() {
+                            if i + 1 > connections.len() {
+                                println!("Invalid index; index out of range.");
+                                continue;
+                            }
+                            peer_conn = Some(connections[i].clone());
+                            input_mode = InputMode::Message;
+                            break;
+                        } else {
+                            println!("{}", input);
+                            if input == "+\n" {
+                                input_mode = InputMode::AddConnection;
+                                break;
+                            }
+                            println!("Invalid index; index not a number.");
+                            continue;
+                        }          
+                    }
+                } else {
+                    panic!("ERROR: Couldn't list connections; Invalid backend response")
+                }
+            },
+            InputMode::AddConnection => {
+                println!("Not yet implemented");
+            },
+            InputMode::Message => {
+                if let Some(ref peer_conn) = peer_conn {
+                    println!("Type your message to {}: ", peer_conn.peer_name);
+                    input = String::new();
+                    stdin().read_line(&mut input).unwrap();
+
+                    let request = serde_json::to_string(
+                        &BackendRequest::Send((
+                            peer_conn.peer_id, 
+                            MessageContent::Text(input.to_string())
+                        ))).unwrap() + "\n";
+                    serv_writer.write(request.as_bytes()).unwrap();
+                    serv_writer.flush().unwrap();
+                } else {
+                    panic!("ERROR: attempted to write message without a selected connection");
+                }
+            }      
+        } 
     }
 }

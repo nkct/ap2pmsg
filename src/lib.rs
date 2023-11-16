@@ -15,13 +15,18 @@ pub trait Writable {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum BackendRequest {
-    Send((SocketAddr, MessageContent)),
+    // close server
+    //EstablishConnection(SocketAddr, String),
+    // list messages (peer_id, from, to)
+    ListConnections,
+    Send((u64, MessageContent)),
 }
 impl Writable for BackendRequest {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum BackendResponse {
-    ConnectionEstablished(Result<(), String>)
+    ConnectionEstablished(Result<(), String>),
+    ConnectionsListed(Vec<Connection>),
 }
 impl Writable for BackendResponse {}
 
@@ -48,14 +53,14 @@ impl Message {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Connection {
-    peer_id: u64,
-    self_id: u64,
-    peer_name: String,
-    peer_addr: SocketAddr,
-    online: bool,
-    time_established: OffsetDateTime,
+    pub peer_id: u64,
+    pub self_id: u64,
+    pub peer_name: String,
+    pub peer_addr: SocketAddr,
+    pub online: bool,
+    pub time_established: OffsetDateTime,
 }
 impl Connection {
     pub fn new(peer_id: u64, self_id: u64, peer_name: String, peer_addr: SocketAddr) -> Self {
@@ -188,10 +193,46 @@ impl DbConn {
             peer_id: values.0,
             self_id: values.1,
             peer_name: values.2,
-            peer_addr: values.3.parse().unwrap(),
+            peer_addr: values.3.parse::<SocketAddr>().unwrap(),
             online: values.4,
             time_established: OffsetDateTime::parse(&values.5, datetime_format).unwrap(),
         })
+    }
+
+    pub fn get_connections(&self) -> Result<Vec<Connection>, DbErr> {
+        let mut stmt = self.0.prepare("
+            SELECT peer_id, self_id, peer_name, peer_addr, online, time_established FROM Connections
+        ;")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<usize, u64>(0)?,
+                row.get::<usize, u64>(1)?,
+                row.get::<usize, String>(2)?,
+                row.get::<usize, String>(3)?,
+                row.get::<usize, bool>(4)?,
+                row.get::<usize, String>(5)?,
+            ))
+        })?;
+
+        let datetime_format =  &time::format_description::parse(
+            "[year]-[month]-[day] [hour]:[minute]:[second]"
+        ).unwrap();
+
+        let mut conns = Vec::new();
+        for values in rows {
+            let values = values?;
+            conns.push(Connection {
+                peer_id: values.0,
+                self_id: values.1,
+                peer_name: values.2,
+                peer_addr: values.3.parse::<SocketAddr>().unwrap(),
+                online: values.4,
+                time_established: OffsetDateTime::parse(&values.5, datetime_format).unwrap(),
+            })
+        }
+        
+
+        return Ok(conns);
     }
 
     pub fn insert_message(&self, peer_id: u64, content: MessageContent) -> Result<u64, Box<dyn std::error::Error>> {

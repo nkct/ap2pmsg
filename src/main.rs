@@ -109,7 +109,7 @@ impl Server {
         }
 
         listener_thread.join().unwrap();
-        println!("\nPress any key to exit");
+        println!("\nPress enter to exit");
         stdin().read_line(&mut String::new()).unwrap();
     }
 
@@ -189,13 +189,19 @@ impl Server {
 
                     match serde_json::from_str::<BackendRequest>(&request) {
                         Ok(request) => {
+                            let db_conn = DbConn::new(rusqlite::Connection::open(db_path).unwrap());
+                            println!("Backend Request: {:#?}", request);
                             match request {
                                 BackendRequest::Send((peer_id, content)) => {
                                     // TO DO: construct a Message, save to db, send to peer
-                                    println!("Backend Request: Send({}, {:?})", peer_id, content);
-                                    let db_conn = DbConn::new(rusqlite::Connection::open(db_path).unwrap());
                                     db_conn.insert_message(peer_id, content).unwrap();
                                 }
+                                BackendRequest::ListConnections => {
+                                    BackendResponse::ConnectionsListed(db_conn.get_connections().unwrap()).write(&mut writer).unwrap();
+                                }
+                                _ => {
+                                    println!("Handling this backend request is not yet implemented")
+                                } 
                             }
                         },
                         Err(e) => {
