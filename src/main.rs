@@ -4,7 +4,7 @@ use std::{
     net::{TcpListener, ToSocketAddrs, SocketAddr, TcpStream}, 
     error::Error, 
     env, 
-    process::Command, path::{Path, PathBuf}, 
+    process::Command, path::PathBuf, 
 };
 use serde_json;
 
@@ -34,20 +34,14 @@ impl Default for Setttings {
 }
 
 struct Server {
-    db_conn: DbConn,
-    settings: Setttings,
 }
 impl Server {
     pub fn run() {
         let args: Vec<_> = env::args().collect();
-        let mut frontend_type = FrontendType::CLI;
-        let mut serv_in_background = false;
-        let serv_addr = "0.0.0.0:7878";
-        let terminal_emulator = "xfce4-terminal";
-        let db_path = "./local_storage.db";
+        let mut settings = Setttings::default();
 
         // initialize db
-        let db_conn  = DbConn::new(rusqlite::Connection::open(db_path).unwrap());
+        let db_conn = DbConn::new(rusqlite::Connection::open(&settings.db_path).unwrap());
         if !db_conn.table_exists("Connections").unwrap() {
             println!("Table Connections doesn't exist, creating");
             db_conn.create_connections_table().unwrap();
@@ -65,43 +59,43 @@ impl Server {
                         panic!("ERROR: Did not supply value for frontend_type argument")
                     }
                     match args[i + 1].to_uppercase().as_str() {
-                        "CLI" | "C" | "CMD" | "TERMINAL" => { frontend_type = FrontendType::CLI },
-                        "WEB" | "W" | "REACT" => { frontend_type = FrontendType::WEB },
+                        "CLI" | "C" | "CMD" | "TERMINAL" => { settings.frontend_type = FrontendType::CLI },
+                        "WEB" | "W" | "REACT" => { settings.frontend_type = FrontendType::WEB },
                         _ => { panic!("ERROR: Invalid value for flag frontend_type ('-f', '--frontend'): {}", args[i + 1]) }
                     }
                 }
                 if arg == "-b" || arg == "--background" {
-                    if serv_in_background {
-                        serv_in_background = false
+                    if settings.serv_in_background {
+                        settings.serv_in_background = false
                     } else {
-                        serv_in_background = true
+                        settings.serv_in_background = true
                     }
                 }
             }
         }
 
         // start listening
-        let listener = Self::get_listener(serv_addr).unwrap();
+        let listener = Self::get_listener(settings.serv_addr).unwrap();
         let listener_thread = thread::spawn(move|| {
-            Self::listen(listener);
+            Self::listen(listener, settings.db_path);
         });
 
         // set up frontend
-        match frontend_type {
+        match settings.frontend_type {
             FrontendType::CLI => {
                 if cfg!(debug_assertions) {
                     Command::new("cargo")
                         .args(["build", "--bin", "cli"])
                         .output()
                         .expect("failed to build cli frontend");
-                    Command::new(terminal_emulator)
-                        .args(["-e", &format!("target/debug/cli {}", serv_addr)])
+                    Command::new(settings.terminal_emulator)
+                        .args(["-e", &format!("target/debug/cli {}", settings.serv_addr)])
                         .spawn()
                         .expect("failed to start cli frontend");
                 } else {
                     // get child procces returned status code and handle errors
-                    Command::new(terminal_emulator)
-                        .args(["-e", &format!("./frontends/cli {}", serv_addr)])
+                    Command::new(settings.terminal_emulator)
+                        .args(["-e", &format!("./frontends/cli {}", settings.serv_addr)])
                         .spawn()
                         .expect("failed to start cli frontend");
                 }
@@ -110,7 +104,7 @@ impl Server {
             FrontendType::WEB => { panic!("TODO: Web frontend is not yet implemented") },
         }
 
-        if serv_in_background {
+        if settings.serv_in_background {
             panic!("TODO: Running backend in the background is not yet implemented")
         }
 
@@ -139,7 +133,10 @@ impl Server {
         return Ok(listener);
     }
 
-    fn listen(listener: TcpListener) {
+    fn listen(listener: TcpListener, db_path: PathBuf) {
+        // sketchy stuff to simply share an str among threads
+        let db_path: &'static str = Box::leak(db_path.into_os_string().into_string().unwrap().into_boxed_str());
+
         let mut frontend_addr: Option<SocketAddr> = None;
         let mut listener_thread: Option<JoinHandle<()>> = None;
         listener.set_nonblocking(true).expect("Cannot set non-blocking");
@@ -193,9 +190,11 @@ impl Server {
                     match serde_json::from_str::<BackendRequest>(&request) {
                         Ok(request) => {
                             match request {
-                                BackendRequest::Send((addr, content)) => {
+                                BackendRequest::Send((peer_id, content)) => {
                                     // TO DO: construct a Message, save to db, send to peer
-                                    println!("Backend Request: Send({}, {:?})", addr, content)
+                                    println!("Backend Request: Send({}, {:?})", peer_id, content);
+                                    let db_conn = DbConn::new(rusqlite::Connection::open(db_path).unwrap());
+                                    db_conn.insert_message(peer_id, content).unwrap();
                                 }
                             }
                         },
