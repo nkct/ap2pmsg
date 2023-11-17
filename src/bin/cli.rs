@@ -21,7 +21,7 @@ fn main() {
 
     let mut response = String::new();
     serv_reader.read_line(&mut response).unwrap();
-    if let Ok(BackendResponse::ConnectionEstablished(response)) = serde_json::from_str::<BackendResponse>(&response) {
+    if let Ok(BackendToFrontendResponse::LinkingResult(response)) = serde_json::from_str::<BackendToFrontendResponse>(&response) {
         match response {
             Ok(()) => { println!("Connection with backend succesfully established") },
             Err(e) => { panic!("ERROR: {}", e) }
@@ -35,16 +35,17 @@ fn main() {
     let mut input;
     let mut input_mode = InputMode::SelectConnection;
     loop {
+        print!("\x1b[2J\x1b[1;1H");
         match input_mode {
             InputMode::SelectConnection => {
                 let request = serde_json::to_string(
-                    &BackendRequest::ListConnections).unwrap() + "\n";
+                    &BackendToFrontendRequest::ListPeerConnections).unwrap() + "\n";
                 serv_writer.write(request.as_bytes()).unwrap();
                 serv_writer.flush().unwrap();
 
                 let mut response = String::new();
                 serv_reader.read_line(&mut response).unwrap();
-                if let Ok(BackendResponse::ConnectionsListed(connections)) = serde_json::from_str::<BackendResponse>(&response) {
+                if let Ok(BackendToFrontendResponse::PeerConnectionsListed(connections)) = serde_json::from_str::<BackendToFrontendResponse>(&response) {
                     let mut index = 0;
                     if connections.is_empty() {
                         println!("No connections");
@@ -93,7 +94,7 @@ fn main() {
                     stdin().read_line(&mut input).unwrap();
 
                     let request = serde_json::to_string(
-                        &BackendRequest::Send((
+                        &BackendToFrontendRequest::SendToPeer((
                             peer_conn.peer_id, 
                             MessageContent::Text(input.to_string())
                         ))).unwrap() + "\n";

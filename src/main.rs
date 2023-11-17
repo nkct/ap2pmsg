@@ -162,7 +162,7 @@ impl Server {
             let mut reader = BufReader::new(frontend_conn.try_clone().unwrap());
 
             if frontend_addr.is_some() {
-                BackendResponse::ConnectionEstablished(Err(format!(
+                BackendToFrontendResponse::LinkingResult(Err(format!(
                     "Connection to backend refused; this backend is already serving a frontend at: {}", frontend_addr.unwrap()
                 ))).write(&mut writer).unwrap();
                 drop(frontend_conn);
@@ -171,7 +171,7 @@ impl Server {
             frontend_addr = frontend_conn.peer_addr().ok();
 
             listener_thread = Some(thread::spawn(move|| {
-                BackendResponse::ConnectionEstablished(Ok(())).write(&mut writer).unwrap();
+                BackendToFrontendResponse::LinkingResult(Ok(())).write(&mut writer).unwrap();
                     
                 println!("New connection: {}", frontend_addr.unwrap());            
                 loop {
@@ -187,17 +187,20 @@ impl Server {
                         break;
                     }
 
-                    match serde_json::from_str::<BackendRequest>(&request) {
+                    match serde_json::from_str::<BackendToFrontendRequest>(&request) {
                         Ok(request) => {
                             let db_conn = DbConn::new(rusqlite::Connection::open(db_path).unwrap());
-                            println!("Backend Request: {:#?}", request);
+                            println!("{:#?}", request);
                             match request {
-                                BackendRequest::Send((peer_id, content)) => {
+                                BackendToFrontendRequest::SendToPeer((peer_id, content)) => {
                                     // TO DO: construct a Message, save to db, send to peer
                                     db_conn.insert_message(peer_id, content).unwrap();
                                 }
-                                BackendRequest::ListConnections => {
-                                    BackendResponse::ConnectionsListed(db_conn.get_connections().unwrap()).write(&mut writer).unwrap();
+                                BackendToFrontendRequest::ListPeerConnections => {
+                                    BackendToFrontendResponse::PeerConnectionsListed(db_conn.get_connections().unwrap()).write(&mut writer).unwrap();
+                                }
+                                BackendToFrontendRequest::EstablishPeerConnection(peer_addr, peer_name) => {
+                                    //Connection::new(peer_id, self_id, peer_name, peer_addr)
                                 }
                                 _ => {
                                     println!("Handling this backend request is not yet implemented")

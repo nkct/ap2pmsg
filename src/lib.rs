@@ -14,22 +14,21 @@ pub trait Writable {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum BackendRequest {
+pub enum BackendToFrontendRequest {
     // close server
-    //EstablishConnection(SocketAddr, String),
+    EstablishPeerConnection(SocketAddr, String),
     // list messages (peer_id, from, to)
-    ListConnections,
-    Send((u64, MessageContent)),
+    ListPeerConnections,
+    SendToPeer((u64, MessageContent)),
 }
-impl Writable for BackendRequest {}
+impl Writable for BackendToFrontendRequest {}
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum BackendResponse {
-    ConnectionEstablished(Result<(), String>),
-    ConnectionsListed(Vec<Connection>),
+pub enum BackendToFrontendResponse {
+    LinkingResult(Result<(), String>),
+    PeerConnectionsListed(Vec<Connection>),
 }
-impl Writable for BackendResponse {}
-
+impl Writable for BackendToFrontendResponse {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum MessageContent {
