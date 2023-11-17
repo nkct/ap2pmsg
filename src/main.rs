@@ -20,6 +20,7 @@ struct Setttings {
     serv_addr: SocketAddr,
     terminal_emulator: PathBuf,
     db_path: PathBuf,
+    self_name: String,
 }
 impl Default for Setttings {
     fn default() -> Self {
@@ -29,6 +30,7 @@ impl Default for Setttings {
             serv_addr: "0.0.0.0:7878".parse().unwrap(),
             terminal_emulator: "xfce4-terminal".parse().unwrap(),
             db_path: "./local_storage.db".parse().unwrap(),
+            self_name: "Default Name".to_owned(),
         }
     }
 }
@@ -77,7 +79,7 @@ impl Server {
         // start listening
         let listener = Self::get_listener(settings.serv_addr).unwrap();
         let listener_thread = thread::spawn(move|| {
-            Self::listen(listener, settings.db_path);
+            Self::listen(listener, settings.db_path, settings.self_name);
         });
 
         // set up frontend
@@ -133,9 +135,10 @@ impl Server {
         return Ok(listener);
     }
 
-    fn listen(listener: TcpListener, db_path: PathBuf) {
-        // sketchy stuff to simply share an str among threads
+    fn listen(listener: TcpListener, db_path: PathBuf, self_name: String) {
+        // sketchy stuff to simply share a string among threads
         let db_path: &'static str = Box::leak(db_path.into_os_string().into_string().unwrap().into_boxed_str());
+        let self_name: &'static str = Box::leak(self_name.into_boxed_str());
 
         let mut frontend_addr: Option<SocketAddr> = None;
         let mut listener_thread: Option<JoinHandle<()>> = None;
@@ -199,8 +202,23 @@ impl Server {
                                 BackendToFrontendRequest::ListPeerConnections => {
                                     BackendToFrontendResponse::PeerConnectionsListed(db_conn.get_connections().unwrap()).write(&mut writer).unwrap();
                                 }
-                                BackendToFrontendRequest::EstablishPeerConnection(peer_addr, peer_name) => {
-                                    //Connection::new(peer_id, self_id, peer_name, peer_addr)
+                                BackendToFrontendRequest::EstablishPeerConnection(peer_addr) => {
+                                    let peer_conn = TcpStream::connect(peer_addr).unwrap_or_else(|e| { panic!("ERROR: Could not connect to peer, {}", e) });
+
+                                    let mut peer_writer = BufWriter::new(peer_conn.try_clone().unwrap());
+                                    let mut peer_reader = BufReader::new(peer_conn);
+
+                                    let peer_id = db_conn.generate_peer_id().unwrap();
+
+                                    PeerToPeerRequest::ProposeConnection(peer_id, self_name.to_owned()).write(&mut peer_writer).unwrap();
+
+                                    let mut response = String::new();
+                                    peer_reader.read_line(&mut response).unwrap();
+                                    if let Ok(PeerToPeerResponse::AcceptConnection(self_id, peer_name)) = serde_json::from_str::<PeerToPeerResponse>(&response) {
+                                        db_conn.insert_connection(Connection::new(peer_id, self_id, peer_name, peer_addr)).unwrap();
+                                    } else {
+                                        panic!("ERROR: Couldn't establish connection with peer {}; Invalid peer response", peer_addr)
+                                    }
                                 }
                                 _ => {
                                     println!("Handling this backend request is not yet implemented")

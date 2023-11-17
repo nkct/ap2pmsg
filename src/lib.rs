@@ -1,6 +1,7 @@
-use std::{net::{SocketAddr, TcpStream}, io::{BufWriter, self, Write}, error::Error, fmt::Display, string};
+use std::{net::{SocketAddr, TcpStream}, io::{BufWriter, self, Write}, error::Error, fmt::Display, string, collections::HashSet};
 use serde::{Serialize, Deserialize};
 use time::{OffsetDateTime};
+use rand::{thread_rng, seq::SliceRandom};
 
 pub trait Writable {
     fn write(&self, writer: &mut BufWriter<TcpStream>) -> Result<(), io::Error> where Self: Serialize {
@@ -16,7 +17,7 @@ pub trait Writable {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum BackendToFrontendRequest {
     // close server
-    EstablishPeerConnection(SocketAddr, String),
+    EstablishPeerConnection(SocketAddr),
     // list messages (peer_id, from, to)
     ListPeerConnections,
     SendToPeer((u64, MessageContent)),
@@ -29,6 +30,18 @@ pub enum BackendToFrontendResponse {
     PeerConnectionsListed(Vec<Connection>),
 }
 impl Writable for BackendToFrontendResponse {}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum PeerToPeerRequest {
+    ProposeConnection(u64, String)
+}
+impl Writable for PeerToPeerRequest {}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum PeerToPeerResponse {
+    AcceptConnection(u64, String)
+}
+impl Writable for PeerToPeerResponse {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum MessageContent {
@@ -94,6 +107,7 @@ pub enum DbErr {
     TimeError(time::Error),
     UtfError(string::FromUtf8Error),
     InvalidMessageContentType,
+    NoAvailableId,
 }
 impl Display for DbErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -173,7 +187,7 @@ impl DbConn {
             SELECT peer_id, self_id, peer_name, peer_addr, online, time_established FROM Connections 
             WHERE connection_id == 1?
         ;")?;
-        let values = stmt.query_map([connection_id], |row| {
+        let values = stmt.query_row([connection_id], |row| {
             Ok((
                 row.get::<usize, u64>(0)?,
                 row.get::<usize, u64>(1)?,
@@ -182,7 +196,7 @@ impl DbConn {
                 row.get::<usize, bool>(4)?,
                 row.get::<usize, String>(5)?,
             ))
-        })?.next().unwrap()?;
+        })?;
 
         let datetime_format =  &time::format_description::parse(
             "[year]-[month]-[day] [hour]:[minute]:[second]"
@@ -258,7 +272,7 @@ impl DbConn {
             NATURAL JOIN Connections
             WHERE message_id == 1?
         ;")?;
-        let values = stmt.query_map([message_id], |row| {
+        let values = stmt.query_row([message_id], |row| {
             Ok((
                 row.get::<usize, u64>(0)?,
                 row.get::<usize, u64>(1)?,
@@ -268,7 +282,7 @@ impl DbConn {
                 row.get::<usize, String>(5)?,
                 row.get::<usize, Vec<u8>>(6)?,
             ))
-        })?.next().unwrap()?;
+        })?;
 
         let datetime_format =  &time::format_description::parse(
             "[year]-[month]-[day] [hour]:[minute]:[second]"
@@ -294,4 +308,26 @@ impl DbConn {
             content,
         })
     }    
+
+    pub fn generate_peer_id(&self) -> Result<u64, DbErr> {
+        let mut stmt = self.0.prepare("
+            SELECT peer_id FROM Connections
+        ;")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(
+                row.get::<usize, u64>(0)?,
+            )
+        })?;
+        let mut occupied_ids = HashSet::new();
+        for row in rows {
+            occupied_ids.insert(row?);
+        }
+
+        let free_ids: Vec<u64> = (0..u64::MAX).into_iter().filter(|id| !occupied_ids.contains(id)).collect();
+        if let Some(&id) = free_ids.as_slice().choose(&mut thread_rng()) {
+            return Ok(id);
+        } else {
+            return Err(DbErr::NoAvailableId);
+        }
+    }
 }

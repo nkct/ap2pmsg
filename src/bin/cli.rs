@@ -1,4 +1,4 @@
-use std::{io::{stdin, BufWriter, prelude::*, BufReader, stdout}, net::TcpStream, env};
+use std::{io::{stdin, BufWriter, prelude::*, BufReader, stdout}, net::{TcpStream, SocketAddr}, env};
 use ap2pmsg::*;
 
 enum InputMode {
@@ -85,7 +85,24 @@ fn main() {
                 }
             },
             InputMode::AddConnection => {
-                println!("Not yet implemented");
+                println!("Add connection");
+                let peer_addr: SocketAddr;
+                loop {
+                    print!("Peer address: ");
+                    stdout().flush().unwrap();
+                    input = String::new();
+                    stdin().read_line(&mut input).unwrap();
+                    if let Ok(addr) = input.trim().parse::<SocketAddr>() {
+                        peer_addr = addr;
+                        break;
+                    } else {
+                        println!("Invalid address");
+                        continue;
+                    }
+                }                
+
+                BackendToFrontendRequest::EstablishPeerConnection(peer_addr).write(&mut serv_writer).unwrap();
+                input_mode = InputMode::SelectConnection;
             },
             InputMode::Message => {
                 if let Some(ref peer_conn) = peer_conn {
