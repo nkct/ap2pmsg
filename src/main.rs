@@ -4,7 +4,8 @@ use std::{
     net::{TcpListener, ToSocketAddrs, SocketAddr, TcpStream}, 
     error::Error, 
     env, 
-    process::Command, path::PathBuf, 
+    process::Command, 
+    time::Duration, 
 };
 use serde_json;
 
@@ -14,13 +15,15 @@ fn main() {
     Server::run();
 }
 
+#[derive(Debug, Clone, Copy)]
 struct Setttings {
     frontend_type: FrontendType,
     serv_in_background: bool,
     serv_addr: SocketAddr,
-    terminal_emulator: PathBuf,
-    db_path: PathBuf,
-    self_name: String,
+    terminal_emulator: &'static str,
+    db_path: &'static str,
+    self_name: &'static str,
+    peer_timeout: Duration
 }
 impl Default for Setttings {
     fn default() -> Self {
@@ -28,9 +31,10 @@ impl Default for Setttings {
             frontend_type: FrontendType::CLI,
             serv_in_background: false,
             serv_addr: "0.0.0.0:7878".parse().unwrap(),
-            terminal_emulator: "xfce4-terminal".parse().unwrap(),
-            db_path: "./local_storage.db".parse().unwrap(),
-            self_name: "Default Name".to_owned(),
+            terminal_emulator: "xfce4-terminal",
+            db_path: "./local_storage.db",
+            self_name: "Default Name",
+            peer_timeout: Duration::from_secs(1),
         }
     }
 }
@@ -52,6 +56,7 @@ impl Server {
             println!("Table Messages doesn't exist, creating");
             db_conn.create_messages_table().unwrap();
         }
+        drop(db_conn);
 
         // arg parsing
         if args.len() >= 2 {
@@ -79,7 +84,7 @@ impl Server {
         // start listening
         let listener = Self::get_listener(settings.serv_addr).unwrap();
         let listener_thread = thread::spawn(move|| {
-            Self::listen(listener, settings.db_path, settings.self_name);
+            Self::listen(listener, settings);
         });
 
         // set up frontend
@@ -92,13 +97,13 @@ impl Server {
                         .expect("failed to build cli frontend");
                     Command::new(settings.terminal_emulator)
                         .args(["-e", &format!("target/debug/cli {}", settings.serv_addr)])
-                        .spawn()
+                        .status()
                         .expect("failed to start cli frontend");
                 } else {
                     // get child procces returned status code and handle errors
                     Command::new(settings.terminal_emulator)
                         .args(["-e", &format!("./frontends/cli {}", settings.serv_addr)])
-                        .spawn()
+                        .status()
                         .expect("failed to start cli frontend");
                 }
                 
@@ -135,22 +140,10 @@ impl Server {
         return Ok(listener);
     }
 
-    fn listen(listener: TcpListener, db_path: PathBuf, self_name: String) {
-        // sketchy stuff to simply share a string among threads
-        let db_path: &'static str = Box::leak(db_path.into_os_string().into_string().unwrap().into_boxed_str());
-        let self_name: &'static str = Box::leak(self_name.into_boxed_str());
-
-        let mut frontend_addr: Option<SocketAddr> = None;
-        let mut listener_thread: Option<JoinHandle<()>> = None;
-        listener.set_nonblocking(true).expect("Cannot set non-blocking");
+    fn listen(listener: TcpListener, setttings: Setttings) {
+        let mut frontend_thread: Option<JoinHandle<_>> = None;
         for incoming in listener.incoming() {
-            if let Some(ref handle) = listener_thread {
-                if handle.is_finished() {
-                    break;
-                }
-            }
-
-            let frontend_conn: TcpStream;
+            let conn: TcpStream;
             if let Err(e) = incoming {
                 if e.kind() == ErrorKind::WouldBlock {
                     continue;
@@ -159,84 +152,127 @@ impl Server {
                     continue;
                 }
             } else {
-                frontend_conn = incoming.unwrap()
+                conn = incoming.unwrap()
             }
-            let mut writer = BufWriter::new(frontend_conn.try_clone().unwrap());
-            let mut reader = BufReader::new(frontend_conn.try_clone().unwrap());
 
-            if frontend_addr.is_some() {
-                BackendToFrontendResponse::LinkingResult(Err(format!(
-                    "Connection to backend refused; this backend is already serving a frontend at: {}", frontend_addr.unwrap()
-                ))).write(&mut writer).unwrap();
-                drop(frontend_conn);
-                continue;
-            }
-            frontend_addr = frontend_conn.peer_addr().ok();
+            let mut reader = BufReader::new(conn.try_clone().unwrap());
+            let mut writer = BufWriter::new(conn.try_clone().unwrap());
 
-            listener_thread = Some(thread::spawn(move|| {
-                BackendToFrontendResponse::LinkingResult(Ok(())).write(&mut writer).unwrap();
-                    
-                println!("New connection: {}", frontend_addr.unwrap());            
-                loop {
-                    let mut request = String::new();
-                    let result = reader.read_line(&mut request);
-                    if result.is_err() || request.is_empty() {
-                        let e = result.err();
-                        if request.is_empty() || e.as_ref().unwrap().kind() == ErrorKind::ConnectionReset {
-                            println!("{} has closed the connection.", frontend_addr.unwrap());
-                        } else {
-                            println!("Error: {:?}", e.unwrap());
-                        }
+            let mut initial_request = String::new();
+            reader.read_line(&mut initial_request).unwrap();
+            let peer_request_result = serde_json::from_str::<PeerToPeerRequest>(&initial_request);
+            if peer_request_result.is_ok() {
+                thread::spawn(move || {
+                    Server::handle_peer(conn, peer_request_result.unwrap(), setttings);
+                });
+            } else {
+                if let Some(ref handle) = frontend_thread {
+                    if !handle.is_finished() {
+                        let frontend_addr = conn.peer_addr().unwrap();
+                        BackendToFrontendResponse::LinkingResult(Err(format!(
+                            "Linking to backend refused; this backend is already serving a frontend at: {}", frontend_addr
+                        ))).write(&mut writer).unwrap();
+                        println!("Refused fronend linking request from: {}", frontend_addr);
                         break;
                     }
+                }
 
-                    match serde_json::from_str::<BackendToFrontendRequest>(&request) {
-                        Ok(request) => {
-                            let db_conn = DbConn::new(rusqlite::Connection::open(db_path).unwrap());
-                            println!("{:#?}", request);
-                            match request {
-                                BackendToFrontendRequest::SendToPeer((peer_id, content)) => {
-                                    // TO DO: construct a Message, save to db, send to peer
-                                    db_conn.insert_message(peer_id, content).unwrap();
-                                }
-                                BackendToFrontendRequest::ListPeerConnections => {
-                                    BackendToFrontendResponse::PeerConnectionsListed(db_conn.get_connections().unwrap()).write(&mut writer).unwrap();
-                                }
-                                BackendToFrontendRequest::EstablishPeerConnection(peer_addr) => {
-                                    let peer_conn = TcpStream::connect(peer_addr).unwrap_or_else(|e| { panic!("ERROR: Could not connect to peer, {}", e) });
+                if let Ok(BackendToFrontendRequest::LinkingRequest) = serde_json::from_str::<BackendToFrontendRequest>(&initial_request) {
+                    frontend_thread = Some(thread::spawn(move || {
+                        Server::handle_frontend(conn, setttings);
+                    }));
+                } else {
+                    println!("Incorrect request: {:?}", initial_request);
+                }
+            }
+        }
+    }
 
-                                    let mut peer_writer = BufWriter::new(peer_conn.try_clone().unwrap());
-                                    let mut peer_reader = BufReader::new(peer_conn);
+    fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Setttings) {
+        let mut peer_writer = BufWriter::new(conn.try_clone().unwrap());
+        let db_conn = DbConn::new(rusqlite::Connection::open(setttings.db_path).unwrap());
 
-                                    let peer_id = db_conn.generate_peer_id().unwrap();
+        println!("{:#?}", peer_request);
+        match peer_request {
+            PeerToPeerRequest::ProposeConnection(self_id, peer_name) => {
+                let peer_id = db_conn.generate_peer_id().unwrap();
 
-                                    PeerToPeerRequest::ProposeConnection(peer_id, self_name.to_owned()).write(&mut peer_writer).unwrap();
+                db_conn.insert_connection(Connection::new(peer_id, self_id, peer_name, conn.peer_addr().unwrap())).unwrap();
+                PeerToPeerResponse::AcceptConnection(peer_id, setttings.self_name.to_owned()).write(&mut peer_writer).unwrap();
+            }
+        }
+    }
 
-                                    let mut response = String::new();
-                                    peer_reader.read_line(&mut response).unwrap();
-                                    if let Ok(PeerToPeerResponse::AcceptConnection(self_id, peer_name)) = serde_json::from_str::<PeerToPeerResponse>(&response) {
-                                        db_conn.insert_connection(Connection::new(peer_id, self_id, peer_name, peer_addr)).unwrap();
-                                    } else {
-                                        panic!("ERROR: Couldn't establish connection with peer {}; Invalid peer response", peer_addr)
-                                    }
-                                }
-                                _ => {
-                                    println!("Handling this backend request is not yet implemented")
-                                } 
+    fn handle_frontend(conn: TcpStream, setttings: Setttings) {
+        let db_conn = DbConn::new(rusqlite::Connection::open(setttings.db_path).unwrap());
+
+        let mut frontend_writer = BufWriter::new(conn.try_clone().unwrap());
+        let mut frontend_reader = BufReader::new(conn.try_clone().unwrap());
+
+        let frontend_addr = conn.peer_addr().unwrap();
+
+        BackendToFrontendResponse::LinkingResult(Ok(())).write(&mut frontend_writer).unwrap();
+
+        println!("New connection: {}", frontend_addr);            
+        loop {
+            let mut request = String::new();
+            let result = frontend_reader.read_line(&mut request);
+            if result.is_err() || request.is_empty() {
+                let e = result.err();
+                if request.is_empty() || e.as_ref().unwrap().kind() == ErrorKind::ConnectionReset {
+                    println!("{} has closed the connection.", frontend_addr);
+                } else {
+                    println!("Error: {:?}", e.unwrap());
+                }
+                break;
+            }
+
+            match serde_json::from_str::<BackendToFrontendRequest>(&request) {
+                Ok(request) => {
+                    println!("{:#?}", request);
+                    match request {
+                        BackendToFrontendRequest::SendToPeer((peer_id, content)) => {
+                            // TO DO: construct a Message, save to db, send to peer
+                            db_conn.insert_message(peer_id, content).unwrap();
+                        }
+                        BackendToFrontendRequest::ListPeerConnections => {
+                            BackendToFrontendResponse::PeerConnectionsListed(db_conn.get_connections().unwrap()).write(&mut frontend_writer).unwrap();
+                        }
+                        BackendToFrontendRequest::EstablishPeerConnection(peer_addr) => {
+                            let peer_conn_result = TcpStream::connect_timeout(&peer_addr, setttings.peer_timeout);
+                            if let Err(e) = peer_conn_result {
+                                println!("ERROR: Could not connect to peer, {}", e);
+                                continue;
+                            }
+                            let peer_conn = peer_conn_result.unwrap();
+
+                            let mut peer_writer = BufWriter::new(peer_conn.try_clone().unwrap());
+                            let mut peer_reader = BufReader::new(peer_conn);
+                            
+                            let peer_id = db_conn.generate_peer_id().unwrap();
+
+                            PeerToPeerRequest::ProposeConnection(peer_id, setttings.self_name.to_owned()).write(&mut peer_writer).unwrap();
+
+                            let mut response = String::new();
+                            peer_reader.read_line(&mut response).unwrap();
+                            if let Ok(PeerToPeerResponse::AcceptConnection(self_id, peer_name)) = serde_json::from_str::<PeerToPeerResponse>(&response) {
+                                db_conn.insert_connection(Connection::new(peer_id, self_id, peer_name, peer_addr)).unwrap();
+                            } else {
+                                panic!("ERROR: Couldn't establish connection with peer {}; Invalid peer response", peer_addr)
                             }
                         },
-                        Err(e) => {
-                            println!("ERROR: Invalid request \n{} \n{:#?}", e, request);
-                            writer.write(b"ERROR: Invalid request\n").unwrap();
-                            writer.flush().unwrap();
-                            continue;
+                        BackendToFrontendRequest::LinkingRequest => {
+                            panic!("ERROR: Attempted to link an already linked frontend")
                         }
                     }
-        
-                    writer.write(b"Response\n").unwrap();
-                    writer.flush().unwrap();
-                } 
-            }));
-        }
+                },
+                Err(e) => {
+                    println!("ERROR: Invalid request \n{} \n{:#?}", e, request);
+                    frontend_writer.write(b"ERROR: Invalid request\n").unwrap();
+                    frontend_writer.flush().unwrap();
+                    continue;
+                }
+            }
+        };
     }
 }

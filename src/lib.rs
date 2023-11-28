@@ -1,7 +1,18 @@
-use std::{net::{SocketAddr, TcpStream}, io::{BufWriter, self, Write}, error::Error, fmt::Display, string, collections::HashSet};
+use std::{
+    net::{SocketAddr, TcpStream}, 
+    io::{BufWriter, self, Write, BufReader}, 
+    error::Error, 
+    fmt::Display, 
+    string, 
+    fs::File, 
+    path::Path, 
+};
 use serde::{Serialize, Deserialize};
-use time::{OffsetDateTime};
-use rand::{thread_rng, seq::SliceRandom};
+use time::{OffsetDateTime, format_description};
+use rand::rngs::OsRng;
+use rand_unique::RandomSequenceBuilder;
+
+pub const DATETIME_FORMAT: &str = "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3][offset_hour]:[offset_minute]";
 
 pub trait Writable {
     fn write(&self, writer: &mut BufWriter<TcpStream>) -> Result<(), io::Error> where Self: Serialize {
@@ -17,10 +28,11 @@ pub trait Writable {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum BackendToFrontendRequest {
     // close server
+    LinkingRequest,
     EstablishPeerConnection(SocketAddr),
     // list messages (peer_id, from, to)
     ListPeerConnections,
-    SendToPeer((u64, MessageContent)),
+    SendToPeer((u32, MessageContent)),
 }
 impl Writable for BackendToFrontendRequest {}
 
@@ -33,13 +45,13 @@ impl Writable for BackendToFrontendResponse {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum PeerToPeerRequest {
-    ProposeConnection(u64, String)
+    ProposeConnection(u32, String)
 }
 impl Writable for PeerToPeerRequest {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum PeerToPeerResponse {
-    AcceptConnection(u64, String)
+    AcceptConnection(u32, String)
 }
 impl Writable for PeerToPeerResponse {}
 
@@ -51,15 +63,15 @@ pub enum MessageContent {
 // sender_id is unique to each connection
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Message {
-    message_id: u64,
-    self_id: u64,
-    peer_id: u64,
+    message_id: u32,
+    self_id: u32,
+    peer_id: u32,
     time_sent: OffsetDateTime,
     time_recieved: Option<OffsetDateTime>,
     content: MessageContent,
 }
 impl Message {
-    pub fn new(conn: &DbConn, peer_id: u64, content: MessageContent) -> Self {
+    pub fn new(conn: &DbConn, peer_id: u32, content: MessageContent) -> Self {
         let message_id = conn.insert_message(peer_id, content).unwrap();
         conn.get_message(message_id).unwrap()
     }
@@ -67,15 +79,15 @@ impl Message {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Connection {
-    pub peer_id: u64,
-    pub self_id: u64,
+    pub peer_id: u32,
+    pub self_id: u32,
     pub peer_name: String,
     pub peer_addr: SocketAddr,
     pub online: bool,
     pub time_established: OffsetDateTime,
 }
 impl Connection {
-    pub fn new(peer_id: u64, self_id: u64, peer_name: String, peer_addr: SocketAddr) -> Self {
+    pub fn new(peer_id: u32, self_id: u32, peer_name: String, peer_addr: SocketAddr) -> Self {
         Connection {
             peer_id,
             self_id,
@@ -87,7 +99,7 @@ impl Connection {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum FrontendType {
     CLI,
     WEB,
@@ -101,6 +113,33 @@ pub fn get_now() -> OffsetDateTime {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct IdSequence{
+    config: RandomSequenceBuilder<u32>, 
+    n: u32,
+}
+impl IdSequence {
+    fn new() -> Self {
+        Self {
+            config: RandomSequenceBuilder::<u32>::rand(&mut OsRng),
+            n: 0,
+        }
+    }
+}
+impl Iterator for IdSequence {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.n > u32::MAX {
+            return None;
+        }
+
+        let res = self.config.into_iter().n(self.n);
+        self.n += 1;
+        return Some(res);
+    }
+}
+
 #[derive(Debug)]
 pub enum DbErr {
     SqlError(rusqlite::Error),
@@ -108,6 +147,7 @@ pub enum DbErr {
     UtfError(string::FromUtf8Error),
     InvalidMessageContentType,
     NoAvailableId,
+    UnableToSaveSequenceConfig(io::Error)
 }
 impl Display for DbErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -130,6 +170,11 @@ impl From<string::FromUtf8Error> for DbErr {
         DbErr::UtfError(value)
     }
 }
+impl From<io::Error> for DbErr {
+    fn from(value: io::Error) -> Self {
+        DbErr::UnableToSaveSequenceConfig(value)
+    }
+}
 
 // look into replacing sqlite with nosql
 pub struct DbConn(rusqlite::Connection);
@@ -137,6 +182,7 @@ impl DbConn {
     pub fn new(conn: rusqlite::Connection) -> Self {
         DbConn(conn)
     }
+
     pub fn table_exists(&self, table_name: &str) -> rusqlite::Result<bool> {
         Ok(self.0
             .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = :table_name;")?
@@ -173,24 +219,32 @@ impl DbConn {
     }
 
     pub fn insert_connection(&self, connection: Connection) -> Result<usize, Box<dyn std::error::Error>> {
+        let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
         // for the sake of brevity
         let c = connection;
-        Ok(self.0.execute("
-            INSERT INTO Connections (peer_id, self_id, peer_name, peer_addr, online, time_established) VALUES 
-            (?1, ?2, ?3, ?4, ?5, ?6);", 
-            (c.peer_id, c.self_id, c.peer_name, c.peer_addr.to_string(), c.online, c.time_established.to_string())
-        )?)
+        let mut stmt = self.0.prepare("INSERT INTO Connections 
+        (peer_id, self_id, peer_name, peer_addr, online, time_established) VALUES 
+        (?1, ?2, ?3, ?4, ?5, ?6);")?;
+        let res = stmt.execute((
+            c.peer_id, 
+            c.self_id, 
+            c.peer_name, 
+            c.peer_addr.to_string(), 
+            c.online as u8, 
+            c.time_established.format(datetime_format).unwrap()))?;
+        self.0.cache_flush().unwrap();
+        Ok(res)
     }
 
-    pub fn get_connection(&self, connection_id: u64) -> Result<Connection, DbErr> {
+    pub fn get_connection(&self, connection_id: u32) -> Result<Connection, DbErr> {
         let mut stmt = self.0.prepare("
             SELECT peer_id, self_id, peer_name, peer_addr, online, time_established FROM Connections 
             WHERE connection_id == 1?
         ;")?;
         let values = stmt.query_row([connection_id], |row| {
             Ok((
-                row.get::<usize, u64>(0)?,
-                row.get::<usize, u64>(1)?,
+                row.get::<usize, u32>(0)?,
+                row.get::<usize, u32>(1)?,
                 row.get::<usize, String>(2)?,
                 row.get::<usize, String>(3)?,
                 row.get::<usize, bool>(4)?,
@@ -198,17 +252,13 @@ impl DbConn {
             ))
         })?;
 
-        let datetime_format =  &time::format_description::parse(
-            "[year]-[month]-[day] [hour]:[minute]:[second]"
-        ).unwrap();
-
         Ok(Connection {
             peer_id: values.0,
             self_id: values.1,
             peer_name: values.2,
             peer_addr: values.3.parse::<SocketAddr>().unwrap(),
             online: values.4,
-            time_established: OffsetDateTime::parse(&values.5, datetime_format).unwrap(),
+            time_established: OffsetDateTime::parse(&values.5, &format_description::parse(DATETIME_FORMAT).unwrap()).unwrap(),
         })
     }
 
@@ -218,18 +268,14 @@ impl DbConn {
         ;")?;
         let rows = stmt.query_map([], |row| {
             Ok((
-                row.get::<usize, u64>(0)?,
-                row.get::<usize, u64>(1)?,
+                row.get::<usize, u32>(0)?,
+                row.get::<usize, u32>(1)?,
                 row.get::<usize, String>(2)?,
                 row.get::<usize, String>(3)?,
                 row.get::<usize, bool>(4)?,
                 row.get::<usize, String>(5)?,
             ))
         })?;
-
-        let datetime_format =  &time::format_description::parse(
-            "[year]-[month]-[day] [hour]:[minute]:[second]"
-        ).unwrap();
 
         let mut conns = Vec::new();
         for values in rows {
@@ -240,7 +286,7 @@ impl DbConn {
                 peer_name: values.2,
                 peer_addr: values.3.parse::<SocketAddr>().unwrap(),
                 online: values.4,
-                time_established: OffsetDateTime::parse(&values.5, datetime_format).unwrap(),
+                time_established: OffsetDateTime::parse(&values.5, &format_description::parse(DATETIME_FORMAT).unwrap()).unwrap(),
             })
         }
         
@@ -248,7 +294,7 @@ impl DbConn {
         return Ok(conns);
     }
 
-    pub fn insert_message(&self, peer_id: u64, content: MessageContent) -> Result<u64, Box<dyn std::error::Error>> {
+    pub fn insert_message(&self, peer_id: u32, content: MessageContent) -> Result<u32, Box<dyn std::error::Error>> {
         let content_type: &str;
         let blob: Vec<u8>;
         match content {
@@ -262,11 +308,11 @@ impl DbConn {
         ((SELECT connection_id FROM Connections WHERE peer_id == ?1), NULL, ?2, ?3)", (peer_id, content_type, blob))?;
         
         let mut stmt = self.0.prepare("SELECT message_id FROM Messages ORDER BY message_id LIMIT 1;")?;
-        let mut results = stmt.query_map((), |row| {row.get::<usize, u64>(0)})?;
+        let mut results = stmt.query_map((), |row| {row.get::<usize, u32>(0)})?;
         Ok(results.next().unwrap()?)
     }
 
-    pub fn get_message(&self, message_id: u64) -> Result<Message, DbErr> {
+    pub fn get_message(&self, message_id: u32) -> Result<Message, DbErr> {
         let mut stmt = self.0.prepare("
             SELECT message_id, peer_id, self_id, time_sent, time_recieved, content_type, content FROM Messages 
             NATURAL JOIN Connections
@@ -274,9 +320,9 @@ impl DbConn {
         ;")?;
         let values = stmt.query_row([message_id], |row| {
             Ok((
-                row.get::<usize, u64>(0)?,
-                row.get::<usize, u64>(1)?,
-                row.get::<usize, u64>(2)?,
+                row.get::<usize, u32>(0)?,
+                row.get::<usize, u32>(1)?,
+                row.get::<usize, u32>(2)?,
                 row.get::<usize, String>(3)?,
                 row.get::<usize, Option<String>>(4)?,
                 row.get::<usize, String>(5)?,
@@ -284,9 +330,7 @@ impl DbConn {
             ))
         })?;
 
-        let datetime_format =  &time::format_description::parse(
-            "[year]-[month]-[day] [hour]:[minute]:[second]"
-        ).unwrap();
+        let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
 
         let content = match values.5.as_str() {
             "TEXT" => {
@@ -309,25 +353,27 @@ impl DbConn {
         })
     }    
 
-    pub fn generate_peer_id(&self) -> Result<u64, DbErr> {
-        let mut stmt = self.0.prepare("
-            SELECT peer_id FROM Connections
-        ;")?;
-        let rows = stmt.query_map([], |row| {
-            Ok(
-                row.get::<usize, u64>(0)?,
-            )
-        })?;
-        let mut occupied_ids = HashSet::new();
-        for row in rows {
-            occupied_ids.insert(row?);
+    pub fn generate_peer_id(&self) -> Result<u32, DbErr> {      
+        let id_sequence_path = Path::new("id_sequence.json");
+        let mut id_sequence: IdSequence;
+        if id_sequence_path.exists() {
+            let seq_reader = BufReader::new(File::open(id_sequence_path)?);
+            id_sequence = serde_json::from_reader::<BufReader<_>, IdSequence>(seq_reader).unwrap();
+        } else {
+            id_sequence = IdSequence::new();
         }
 
-        let free_ids: Vec<u64> = (0..u64::MAX).into_iter().filter(|id| !occupied_ids.contains(id)).collect();
-        if let Some(&id) = free_ids.as_slice().choose(&mut thread_rng()) {
-            return Ok(id);
+        let res: u32;
+        if let Some(id) = id_sequence.next() {
+            res = id;
         } else {
             return Err(DbErr::NoAvailableId);
         }
+
+        let mut seq_writer = BufWriter::new(File::create(id_sequence_path)?);
+        serde_json::to_writer_pretty(&mut seq_writer, &id_sequence).unwrap();
+        seq_writer.flush().unwrap();
+
+        return Ok(res);
     }
 }

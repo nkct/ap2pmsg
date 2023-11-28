@@ -31,15 +31,22 @@ checksum = "0942ffc6dcaadf03badf6e6a2d0228460359d5e34b57ccdc720b7382dfbd5ec5"
 
 [[package]]
 name = "ap2pmsg"
-version = "0.8.3"
+version = "0.9.0"
 dependencies = [
  "rand",
+ "rand-unique",
  "regex",
  "rusqlite",
  "serde",
  "serde_json",
  "time",
 ]
+
+[[package]]
+name = "autocfg"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
 name = "bitflags"
@@ -144,6 +151,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
 
 [[package]]
+name = "num-traits"
+version = "0.2.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39e3200413f237f41ab11ad6d161bc7239c84dcb631773ccd7de3dfe4b5c267c"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "num_threads"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -203,6 +219,17 @@ dependencies = [
  "libc",
  "rand_chacha",
  "rand_core",
+]
+
+[[package]]
+name = "rand-unique"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a83e1f91c1c954a1ade65d6402d5e6c8172586b888355cee1835ef1340368dfd"
+dependencies = [
+ "num-traits",
+ "rand",
+ "serde",
 ]
 
 [[package]]

@@ -19,6 +19,8 @@ fn main() {
     let mut serv_writer = BufWriter::new(serv_conn.try_clone().unwrap());
     let mut serv_reader = BufReader::new(serv_conn);
 
+    BackendToFrontendRequest::LinkingRequest.write(&mut serv_writer).unwrap();
+
     let mut response = String::new();
     serv_reader.read_line(&mut response).unwrap();
     if let Ok(BackendToFrontendResponse::LinkingResult(response)) = serde_json::from_str::<BackendToFrontendResponse>(&response) {
@@ -38,10 +40,7 @@ fn main() {
         print!("\x1b[2J\x1b[1;1H");
         match input_mode {
             InputMode::SelectConnection => {
-                let request = serde_json::to_string(
-                    &BackendToFrontendRequest::ListPeerConnections).unwrap() + "\n";
-                serv_writer.write(request.as_bytes()).unwrap();
-                serv_writer.flush().unwrap();
+                BackendToFrontendRequest::ListPeerConnections.write(&mut serv_writer).unwrap();
 
                 let mut response = String::new();
                 serv_reader.read_line(&mut response).unwrap();
@@ -81,7 +80,7 @@ fn main() {
                         }          
                     }
                 } else {
-                    panic!("ERROR: Couldn't list connections; Invalid backend response")
+                    panic!("ERROR: Couldn't list connections; Invalid backend response: {}", response)
                 }
             },
             InputMode::AddConnection => {
