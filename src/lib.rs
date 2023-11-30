@@ -32,7 +32,7 @@ pub enum BackendToFrontendRequest {
     EstablishPeerConnection(SocketAddr),
     // list messages (peer_id, from, to)
     ListPeerConnections,
-    SendToPeer((u32, MessageContent)),
+    MessagePeer((u32, MessageContent)),
 }
 impl Writable for BackendToFrontendRequest {}
 
@@ -45,13 +45,15 @@ impl Writable for BackendToFrontendResponse {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum PeerToPeerRequest {
-    ProposeConnection(u32, String)
+    ProposeConnection(u32, String, SocketAddr),
+    Message(Message),
 }
 impl Writable for PeerToPeerRequest {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum PeerToPeerResponse {
-    AcceptConnection(u32, String)
+    AcceptConnection(u32, String, SocketAddr),
+    Recieved(u32),
 }
 impl Writable for PeerToPeerResponse {}
 
@@ -63,21 +65,15 @@ pub enum MessageContent {
 // sender_id is unique to each connection
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Message {
-    message_id: u32,
-    self_id: u32,
-    peer_id: u32,
-    time_sent: OffsetDateTime,
-    time_recieved: Option<OffsetDateTime>,
-    content: MessageContent,
-}
-impl Message {
-    pub fn new(conn: &DbConn, peer_id: u32, content: MessageContent) -> Self {
-        let message_id = conn.insert_message(peer_id, content).unwrap();
-        conn.get_message(message_id).unwrap()
-    }
+    pub message_id: u32,
+    pub self_id: u32,
+    pub peer_id: u32,
+    pub time_sent: OffsetDateTime,
+    pub time_recieved: Option<OffsetDateTime>,
+    pub content: MessageContent,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Connection {
     pub peer_id: u32,
     pub self_id: u32,
@@ -232,14 +228,33 @@ impl DbConn {
             c.peer_addr.to_string(), 
             c.online as u8, 
             c.time_established.format(datetime_format).unwrap()))?;
-        self.0.cache_flush().unwrap();
         Ok(res)
+    }
+
+    pub fn get_peer_addr(&self, peer_id: u32) -> Result<SocketAddr, DbErr>{
+        let mut stmt = self.0.prepare("
+            SELECT peer_addr FROM Connections 
+            WHERE peer_id == ?1
+        ;")?;
+        let addr = stmt.query_row([peer_id], |row| {
+            Ok(row.get::<usize, String>(0)?)
+        })?;
+        return Ok(addr.parse::<SocketAddr>().unwrap());
+    }
+
+    pub fn mark_as_recieved(&self, msg_id: u32) -> Result<usize, DbErr> {
+        let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
+        let mut stmt = self.0.prepare("
+            UPDATE Messages SET time_recieved = ?1
+            WHERE message_id == ?2
+        ;")?;
+        Ok(stmt.execute((get_now().format(datetime_format).unwrap(), msg_id))?)
     }
 
     pub fn get_connection(&self, connection_id: u32) -> Result<Connection, DbErr> {
         let mut stmt = self.0.prepare("
             SELECT peer_id, self_id, peer_name, peer_addr, online, time_established FROM Connections 
-            WHERE connection_id == 1?
+            WHERE connection_id == ?1
         ;")?;
         let values = stmt.query_row([connection_id], |row| {
             Ok((
@@ -294,7 +309,45 @@ impl DbConn {
         return Ok(conns);
     }
 
-    pub fn insert_message(&self, peer_id: u32, content: MessageContent) -> Result<u32, Box<dyn std::error::Error>> {
+    pub fn new_message(&self, peer_id: u32, content: MessageContent) -> Result<Message, Box<dyn std::error::Error>> {
+        let content_type: &str;
+        let blob: Vec<u8>;
+        match content {
+            MessageContent::Text(content) => {
+                content_type = "TEXT";
+                blob = content.into();
+            }
+        }
+        
+        let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
+        self.0.execute("
+        INSERT INTO Messages (connection_id, time_sent, time_recieved, content_type, content) VALUES 
+        ((SELECT connection_id FROM Connections WHERE peer_id == ?1), ?2, NULL, ?3, ?4)", 
+        (peer_id, get_now().format(datetime_format).unwrap(), content_type, blob))?;
+        
+        let msg = self.get_message(self.0.last_insert_rowid() as u32).unwrap().unwrap();
+        return Ok(msg);
+    }
+
+    pub fn insert_message(&self, msg: Message) -> Result<u32, Box<dyn std::error::Error>> {
+        let content_type: &str;
+        let blob: Vec<u8>;
+        match msg.content {
+            MessageContent::Text(content) => {
+                content_type = "TEXT";
+                blob = content.into();
+            }
+        }
+        let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
+        self.0.execute("
+        INSERT INTO Messages (message_id, connection_id, time_sent, time_recieved, content_type, content) VALUES 
+        (?1, (SELECT connection_id FROM Connections WHERE peer_id == ?2), ?3, ?4, ?5, ?6)", 
+        (msg.message_id, msg.peer_id, msg.time_sent.format(datetime_format).unwrap(), get_now().format(datetime_format).unwrap(), content_type, blob))?;
+        
+        Ok(self.0.last_insert_rowid() as u32)
+    }
+
+    pub fn update_message_content(&self, msg_id: u32, content: MessageContent) -> Result<u32, Box<dyn std::error::Error>> {
         let content_type: &str;
         let blob: Vec<u8>;
         match content {
@@ -304,21 +357,20 @@ impl DbConn {
             }
         }
         self.0.execute("
-        INSERT INTO Messages (connection_id, time_recieved, content_type, content) VALUES 
-        ((SELECT connection_id FROM Connections WHERE peer_id == ?1), NULL, ?2, ?3)", (peer_id, content_type, blob))?;
+        UPDATE Messages  SET content_type = ?1, content = ?2;
+        WHERE message_id == ?3",
+        (content_type, blob, msg_id))?;
         
-        let mut stmt = self.0.prepare("SELECT message_id FROM Messages ORDER BY message_id LIMIT 1;")?;
-        let mut results = stmt.query_map((), |row| {row.get::<usize, u32>(0)})?;
-        Ok(results.next().unwrap()?)
+        Ok(self.0.last_insert_rowid() as u32)
     }
 
-    pub fn get_message(&self, message_id: u32) -> Result<Message, DbErr> {
+    pub fn get_message(&self, message_id: u32) -> Result<Option<Message>, DbErr> {
         let mut stmt = self.0.prepare("
             SELECT message_id, peer_id, self_id, time_sent, time_recieved, content_type, content FROM Messages 
             NATURAL JOIN Connections
-            WHERE message_id == 1?
+            WHERE message_id == ?1
         ;")?;
-        let values = stmt.query_row([message_id], |row| {
+        let values_result = stmt.query_row([message_id], |row| {
             Ok((
                 row.get::<usize, u32>(0)?,
                 row.get::<usize, u32>(1)?,
@@ -328,7 +380,12 @@ impl DbConn {
                 row.get::<usize, String>(5)?,
                 row.get::<usize, Vec<u8>>(6)?,
             ))
-        })?;
+        });
+
+        if let Err(rusqlite::Error::QueryReturnedNoRows) = values_result {
+            return Ok(None);
+        }
+        let values = values_result.unwrap();
 
         let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
 
@@ -341,7 +398,7 @@ impl DbConn {
             }
         };
 
-        Ok(Message {
+        Ok(Some(Message {
             message_id: values.0,
             peer_id: values.1,
             self_id: values.2,
@@ -350,7 +407,7 @@ impl DbConn {
                 OffsetDateTime::parse(&time_recieved, datetime_format).unwrap()
             }),
             content,
-        })
+        }))
     }    
 
     pub fn generate_peer_id(&self) -> Result<u32, DbErr> {      

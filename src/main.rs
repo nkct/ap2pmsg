@@ -192,13 +192,24 @@ impl Server {
         let mut peer_writer = BufWriter::new(conn.try_clone().unwrap());
         let db_conn = DbConn::new(rusqlite::Connection::open(setttings.db_path).unwrap());
 
-        println!("{:#?}", peer_request);
+        println!("PeerToPeerRequest::{:#?}", peer_request);
         match peer_request {
-            PeerToPeerRequest::ProposeConnection(self_id, peer_name) => {
+            PeerToPeerRequest::ProposeConnection(self_id, peer_name, peer_addr) => {
                 let peer_id = db_conn.generate_peer_id().unwrap();
 
-                db_conn.insert_connection(Connection::new(peer_id, self_id, peer_name, conn.peer_addr().unwrap())).unwrap();
-                PeerToPeerResponse::AcceptConnection(peer_id, setttings.self_name.to_owned()).write(&mut peer_writer).unwrap();
+                db_conn.insert_connection(Connection::new(peer_id, self_id, peer_name, peer_addr)).unwrap();
+                PeerToPeerResponse::AcceptConnection(peer_id, setttings.self_name.to_owned(), conn.local_addr().unwrap()).write(&mut peer_writer).unwrap();
+            },
+            PeerToPeerRequest::Message(msg) => {
+                PeerToPeerResponse::Recieved(msg.message_id).write(&mut peer_writer).unwrap();
+                // handle edge case where a host is sending a message to itself
+                if (db_conn.get_peer_addr(msg.peer_id).unwrap() == conn.local_addr().unwrap()) && (db_conn.get_message(msg.message_id).unwrap().is_some()) {
+                    db_conn.mark_as_recieved(msg.message_id).unwrap();
+                } else {
+                    db_conn.insert_message(msg).unwrap();
+                }
+
+                // pass msg to frontend
             }
         }
     }
@@ -229,11 +240,29 @@ impl Server {
 
             match serde_json::from_str::<BackendToFrontendRequest>(&request) {
                 Ok(request) => {
-                    println!("{:#?}", request);
+                    println!("BackendToFrontendRequest::{:#?}", request);
                     match request {
-                        BackendToFrontendRequest::SendToPeer((peer_id, content)) => {
-                            // TO DO: construct a Message, save to db, send to peer
-                            db_conn.insert_message(peer_id, content).unwrap();
+                        BackendToFrontendRequest::MessagePeer((peer_id, content)) => {
+                            let msg = db_conn.new_message(peer_id, content).unwrap();
+                            let peer_addr = &db_conn.get_peer_addr(msg.peer_id).unwrap();
+                            let peer_conn_result = TcpStream::connect_timeout(peer_addr, setttings.peer_timeout);
+                            if let Err(e) = peer_conn_result {
+                                println!("ERROR: Could not connect to peer, {}", e);
+                                continue;
+                            }
+                            let peer_conn = peer_conn_result.unwrap();
+                            let mut peer_writer = BufWriter::new(peer_conn.try_clone().unwrap());
+                            let mut peer_reader = BufReader::new(peer_conn);
+
+                            PeerToPeerRequest::Message(msg).write(&mut peer_writer).unwrap();
+
+                            let mut response = String::new();
+                            peer_reader.read_line(&mut response).unwrap();
+                            if let Ok(PeerToPeerResponse::Recieved(msg_id)) = serde_json::from_str::<PeerToPeerResponse>(&response) {
+                                db_conn.mark_as_recieved(msg_id).unwrap();
+                            } else {
+                                panic!("ERROR: Invalid peer response from {}: {}", peer_addr, &response)
+                            }
                         }
                         BackendToFrontendRequest::ListPeerConnections => {
                             BackendToFrontendResponse::PeerConnectionsListed(db_conn.get_connections().unwrap()).write(&mut frontend_writer).unwrap();
@@ -247,15 +276,15 @@ impl Server {
                             let peer_conn = peer_conn_result.unwrap();
 
                             let mut peer_writer = BufWriter::new(peer_conn.try_clone().unwrap());
-                            let mut peer_reader = BufReader::new(peer_conn);
+                            let mut peer_reader = BufReader::new(peer_conn.try_clone().unwrap());
                             
                             let peer_id = db_conn.generate_peer_id().unwrap();
 
-                            PeerToPeerRequest::ProposeConnection(peer_id, setttings.self_name.to_owned()).write(&mut peer_writer).unwrap();
+                            PeerToPeerRequest::ProposeConnection(peer_id, setttings.self_name.to_owned(), conn.local_addr().unwrap()).write(&mut peer_writer).unwrap();
 
                             let mut response = String::new();
                             peer_reader.read_line(&mut response).unwrap();
-                            if let Ok(PeerToPeerResponse::AcceptConnection(self_id, peer_name)) = serde_json::from_str::<PeerToPeerResponse>(&response) {
+                            if let Ok(PeerToPeerResponse::AcceptConnection(self_id, peer_name, peer_addr)) = serde_json::from_str::<PeerToPeerResponse>(&response) {
                                 db_conn.insert_connection(Connection::new(peer_id, self_id, peer_name, peer_addr)).unwrap();
                             } else {
                                 panic!("ERROR: Couldn't establish connection with peer {}; Invalid peer response", peer_addr)

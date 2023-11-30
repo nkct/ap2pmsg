@@ -44,11 +44,13 @@ fn main() {
 
                 let mut response = String::new();
                 serv_reader.read_line(&mut response).unwrap();
-                if let Ok(BackendToFrontendResponse::PeerConnectionsListed(connections)) = serde_json::from_str::<BackendToFrontendResponse>(&response) {
+                if let Ok(BackendToFrontendResponse::PeerConnectionsListed(mut connections)) = serde_json::from_str::<BackendToFrontendResponse>(&response) {
                     let mut index = 0;
                     if connections.is_empty() {
                         println!("No connections");
                     }
+
+                    connections.dedup_by(|a, b| a.peer_addr == b.peer_addr && a.peer_name == b.peer_name );
                     for conn in &connections {
                         println!("{}) {}: {}", index, conn.peer_name, conn.peer_addr);
                         index += 1;
@@ -110,7 +112,7 @@ fn main() {
                     stdin().read_line(&mut input).unwrap();
 
                     let request = serde_json::to_string(
-                        &BackendToFrontendRequest::SendToPeer((
+                        &BackendToFrontendRequest::MessagePeer((
                             peer_conn.peer_id, 
                             MessageContent::Text(input.to_string())
                         ))).unwrap() + "\n";
