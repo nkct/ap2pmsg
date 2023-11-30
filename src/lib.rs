@@ -30,7 +30,7 @@ pub enum BackendToFrontendRequest {
     // close server
     LinkingRequest,
     EstablishPeerConnection(SocketAddr),
-    // list messages (peer_id, from, to)
+    ListMessages(u32, OffsetDateTime, OffsetDateTime),
     ListPeerConnections,
     MessagePeer((u32, MessageContent)),
 }
@@ -40,6 +40,7 @@ impl Writable for BackendToFrontendRequest {}
 pub enum BackendToFrontendResponse {
     LinkingResult(Result<(), String>),
     PeerConnectionsListed(Vec<Connection>),
+    MessagesListed(Vec<Message>),
 }
 impl Writable for BackendToFrontendResponse {}
 
@@ -242,6 +243,17 @@ impl DbConn {
         return Ok(addr.parse::<SocketAddr>().unwrap());
     }
 
+    pub fn get_peer_name(&self, peer_id: u32) -> Result<String, DbErr>{
+        let mut stmt = self.0.prepare("
+            SELECT peer_name FROM Connections 
+            WHERE peer_id == ?1
+        ;")?;
+        let name = stmt.query_row([peer_id], |row| {
+            Ok(row.get::<usize, String>(0)?)
+        })?;
+        return Ok(name);
+    }
+
     pub fn mark_as_recieved(&self, msg_id: u32) -> Result<usize, DbErr> {
         let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
         let mut stmt = self.0.prepare("
@@ -408,7 +420,58 @@ impl DbConn {
             }),
             content,
         }))
-    }    
+    }
+
+    pub fn get_messages(&self, peer_id: u32, since: OffsetDateTime, untill: OffsetDateTime) -> Result<Vec<Message>, DbErr> {
+        let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
+        let mut stmt = self.0.prepare("
+            SELECT message_id, peer_id, self_id, time_sent, time_recieved, content_type, content FROM Messages
+            NATURAL JOIN Connections
+            WHERE peer_id = ?1 AND time_sent BETWEEN ?2 AND ?3
+        ;")?;
+        let rows = stmt.query_map((
+            peer_id,
+            since.format(datetime_format).unwrap(), 
+            untill.format(datetime_format).unwrap()
+        ), |row| {
+            Ok((
+                row.get::<usize, u32>(0)?,
+                row.get::<usize, u32>(1)?,
+                row.get::<usize, u32>(2)?,
+                row.get::<usize, String>(3)?,
+                row.get::<usize, Option<String>>(4)?,
+                row.get::<usize, String>(5)?,
+                row.get::<usize, Vec<u8>>(6)?,
+            ))
+        })?;
+
+        let mut msgs = Vec::new();
+        for values in rows {
+            let values = values?;
+
+            let content = match values.5.as_str() {
+                "TEXT" => {
+                    MessageContent::Text(String::from_utf8(values.6)?)
+                }
+                _ => {
+                    return Err(DbErr::InvalidMessageContentType)?;
+                }
+            };
+
+            msgs.push(Message {
+                message_id: values.0,
+                peer_id: values.1,
+                self_id: values.2,
+                time_sent: OffsetDateTime::parse(&values.3, datetime_format).unwrap(),
+                time_recieved: values.4.map(|time_recieved| {
+                    OffsetDateTime::parse(&time_recieved, datetime_format).unwrap()
+                }),
+                content,
+            })
+        }
+
+        return Ok(msgs);
+    }
 
     pub fn generate_peer_id(&self) -> Result<u32, DbErr> {      
         let id_sequence_path = Path::new("id_sequence.json");

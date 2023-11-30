@@ -208,8 +208,6 @@ impl Server {
                 } else {
                     db_conn.insert_message(msg).unwrap();
                 }
-
-                // pass msg to frontend
             }
         }
     }
@@ -265,7 +263,14 @@ impl Server {
                             }
                         }
                         BackendToFrontendRequest::ListPeerConnections => {
-                            BackendToFrontendResponse::PeerConnectionsListed(db_conn.get_connections().unwrap()).write(&mut frontend_writer).unwrap();
+                            BackendToFrontendResponse::PeerConnectionsListed(
+                                db_conn.get_connections().unwrap()
+                            ).write(&mut frontend_writer).unwrap();
+                        }
+                        BackendToFrontendRequest::ListMessages(peer_id, since, untill) => {
+                            BackendToFrontendResponse::MessagesListed(
+                                db_conn.get_messages(peer_id, since, untill).unwrap()
+                            ).write(&mut frontend_writer).unwrap();
                         }
                         BackendToFrontendRequest::EstablishPeerConnection(peer_addr) => {
                             let peer_conn_result = TcpStream::connect_timeout(&peer_addr, setttings.peer_timeout);

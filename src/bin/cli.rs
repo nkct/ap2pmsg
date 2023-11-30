@@ -1,5 +1,7 @@
 use std::{io::{stdin, BufWriter, prelude::*, BufReader, stdout}, net::{TcpStream, SocketAddr}, env};
 use ap2pmsg::*;
+use crossterm::{QueueableCommand, cursor::{SavePosition, RestorePosition}, ExecutableCommand};
+use time::OffsetDateTime;
 
 enum InputMode {
     Message,
@@ -107,17 +109,42 @@ fn main() {
             },
             InputMode::Message => {
                 if let Some(ref peer_conn) = peer_conn {
-                    println!("Type your message to {}: ", peer_conn.peer_name);
+                    BackendToFrontendRequest::ListMessages(peer_conn.peer_id, OffsetDateTime::UNIX_EPOCH, get_now()).write(&mut serv_writer).unwrap();
+
+                    let mut response = String::new();
+                    serv_reader.read_line(&mut response).unwrap();
+                    if let Ok(BackendToFrontendResponse::MessagesListed(messages)) = serde_json::from_str::<BackendToFrontendResponse>(&response) {
+                        for message in messages {
+                            match message.content {
+                                MessageContent::Text(text) => {
+                                    print!("{}: {}", message.peer_id, text);
+                                    stdout().flush().unwrap();
+                                }
+                            }
+                        }
+                        println!("");
+                    } else {
+                        panic!("ERROR: Couldn't list messages; Invalid backend response: {}", response)
+                    }
+                    
+
+                    print!("Message {}: ", peer_conn.peer_name);
+                    stdout().flush().unwrap();
+                    stdout().execute(SavePosition).unwrap();
+                    println!("\nType Escape to exit.");
+                    stdout().execute(RestorePosition).unwrap();
                     input = String::new();
                     stdin().read_line(&mut input).unwrap();
 
-                    let request = serde_json::to_string(
-                        &BackendToFrontendRequest::MessagePeer((
-                            peer_conn.peer_id, 
-                            MessageContent::Text(input.to_string())
-                        ))).unwrap() + "\n";
-                    serv_writer.write(request.as_bytes()).unwrap();
-                    serv_writer.flush().unwrap();
+                    if input == "\u{1b}\n" {
+                        input_mode = InputMode::SelectConnection;
+                        continue;
+                    }
+
+                    BackendToFrontendRequest::MessagePeer((
+                        peer_conn.peer_id, 
+                        MessageContent::Text(input.to_string())
+                    )).write(&mut serv_writer).unwrap();
                 } else {
                     panic!("ERROR: attempted to write message without a selected connection");
                 }
