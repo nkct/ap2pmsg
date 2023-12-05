@@ -41,6 +41,7 @@ pub enum BackendToFrontendResponse {
     LinkingResult(Result<(), String>),
     PeerConnectionsListed(Vec<Connection>),
     MessagesListed(Vec<Message>),
+    InvalidRequest,
 }
 impl Writable for BackendToFrontendResponse {}
 

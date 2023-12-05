@@ -1,6 +1,6 @@
 [package]
 name = "ap2pmsg"
-version = "0.10.2"
+version = "0.10.3"
 edition = "2021"
 
 [dependencies]
@@ -12,3 +12,5 @@ rusqlite = { version = "0.29.0", features = ["bundled"] }
 rand = "0.8.5"
 rand-unique = { version = "0.2.2", features = ["serde"]}
 crossterm = "0.27.0"
+env_logger = "0.10.1"
+log = "0.4.20"

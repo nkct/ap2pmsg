@@ -1,6 +1,6 @@
 use std::{io::{stdin, BufWriter, prelude::*, BufReader, stdout}, net::{TcpStream, SocketAddr}, env};
 use ap2pmsg::*;
-use crossterm::{QueueableCommand, cursor::{SavePosition, RestorePosition}, ExecutableCommand};
+use crossterm::{cursor::{SavePosition, RestorePosition}, ExecutableCommand};
 use time::OffsetDateTime;
 
 enum InputMode {
