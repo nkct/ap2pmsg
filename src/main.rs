@@ -67,6 +67,7 @@ fn main() -> ExitCode {
                     match args[i + 1].to_uppercase().as_str() {
                         "CLI" | "C" | "CMD" | "TERMINAL" => { settings.frontend_type = FrontendType::CLI },
                         "WEB" | "W" | "REACT" => { settings.frontend_type = FrontendType::WEB },
+                        "NONE" | "N" => { settings.frontend_type = FrontendType::NONE }
                         _ => { 
                             error!("Invalid value for flag frontend_type ('-f', '--frontend'): {}", args[i + 1]);
                             return ExitCode::from(1);
@@ -108,6 +109,7 @@ fn main() -> ExitCode {
                 .expect("failed to start cli frontend");
         },
         FrontendType::WEB => { todo!("Web frontend") },
+        FrontendType::NONE => {},
     }
 
     if settings.serv_in_background {

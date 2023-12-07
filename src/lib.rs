@@ -101,6 +101,7 @@ impl Connection {
 pub enum FrontendType {
     CLI,
     WEB,
+    NONE,
 }
 
 pub fn get_now() -> OffsetDateTime {
