@@ -10,6 +10,7 @@ use std::{
 use serde_json;
 use env_logger;
 use log::{error, warn, info, debug};
+use local_ip_address::local_ip;
 
 use ap2pmsg::*;
 
@@ -28,7 +29,7 @@ impl Default for Setttings {
         Setttings { 
             frontend_type: FrontendType::CLI,
             serv_in_background: false,
-            serv_addr: "0.0.0.0:7878".parse().unwrap(),
+            serv_addr: SocketAddr::new(local_ip().unwrap(), 7878),
             terminal_emulator: "xfce4-terminal",
             db_path: "./local_storage.db",
             self_name: "Default Name",
@@ -60,7 +61,7 @@ fn main() -> ExitCode {
         for (i, arg) in args.iter().enumerate() {
             match arg.as_str() {
                 "-f" | "--frontend" => {
-                    if args.len() < i + 1 {
+                    if args.len() < i + 2 {
                         error!("Did not supply value for frontend_type argument");
                         return ExitCode::from(1);
                     }
@@ -296,6 +297,7 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
                         let peer_conn_result = TcpStream::connect_timeout(&peer_addr, setttings.peer_timeout);
                         if let Err(e) = peer_conn_result {
                             warn!("Could not connect to peer, {}", e);
+                            // todo: inform frontend about failure
                             continue;
                         }
                         let peer_conn = peer_conn_result.unwrap();

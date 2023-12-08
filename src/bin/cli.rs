@@ -75,7 +75,7 @@ fn main() {
                             break;
                         } else {
                             println!("{}", input);
-                            if input == "+\n" {
+                            if input.trim() == "+" {
                                 input_mode = InputMode::AddConnection;
                                 break;
                             }

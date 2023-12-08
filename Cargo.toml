@@ -1,6 +1,6 @@
 [package]
 name = "ap2pmsg"
-version = "0.10.4"
+version = "0.10.5"
 edition = "2021"
 
 [dependencies]
@@ -14,3 +14,4 @@ rand-unique = { version = "0.2.2", features = ["serde"]}
 crossterm = "0.27.0"
 env_logger = "0.10.1"
 log = "0.4.20"
+local-ip-address = "0.5.6"
