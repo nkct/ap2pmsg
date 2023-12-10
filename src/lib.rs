@@ -356,7 +356,7 @@ impl DbConn {
         self.0.execute("
         INSERT INTO Messages (message_id, connection_id, time_sent, time_recieved, content_type, content) VALUES 
         (?1, (SELECT connection_id FROM Connections WHERE peer_id == ?2), ?3, ?4, ?5, ?6)", 
-        (msg.message_id, msg.peer_id, msg.time_sent.format(datetime_format).unwrap(), get_now().format(datetime_format).unwrap(), content_type, blob))?;
+        (msg.message_id, msg.self_id, msg.time_sent.format(datetime_format).unwrap(), get_now().format(datetime_format).unwrap(), content_type, blob))?;
         
         Ok(self.0.last_insert_rowid() as u32)
     }

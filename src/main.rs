@@ -220,7 +220,7 @@ fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Sett
             PeerToPeerResponse::Recieved(msg.message_id).write(&mut peer_writer).unwrap();
             info!("Confirmed recieving message {} from {}", msg.message_id, peer_addr);
             // handle edge case where a host is sending a message to itself
-            if (db_conn.get_peer_addr(msg.peer_id).unwrap() == local_addr) && (db_conn.get_message(msg.message_id).unwrap().is_some()) {
+            if (db_conn.get_peer_addr(msg.self_id).unwrap() == local_addr) && (db_conn.get_message(msg.message_id).unwrap().is_some()) {
                 db_conn.mark_as_recieved(msg.message_id).unwrap();
             } else {
                 db_conn.insert_message(msg).unwrap();
@@ -259,22 +259,25 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
                 debug!("Recieved BackendToFrontendRequest::{:#?}", request);
                 match request {
                     BackendToFrontendRequest::MessagePeer((peer_id, content)) => {
-                        let msg = db_conn.new_message(peer_id, content).unwrap();
-                        let peer_addr = &db_conn.get_peer_addr(msg.peer_id).unwrap();
+                        let peer_addr = &db_conn.get_peer_addr(peer_id).unwrap();
                         let peer_conn_result = TcpStream::connect_timeout(peer_addr, setttings.peer_timeout);
                         if let Err(e) = peer_conn_result {
                             warn!("Could not connect to peer, {}", e);
                             continue;
                         }
+
                         let peer_conn = peer_conn_result.unwrap();
                         let mut peer_writer = BufWriter::new(peer_conn.try_clone().unwrap());
                         let mut peer_reader = BufReader::new(peer_conn);
 
-                        info!("Sent message {} to peer at {}", msg.message_id, peer_addr);
+                        let msg = db_conn.new_message(peer_id, content).unwrap();
+                        let msg_id = msg.message_id;
                         PeerToPeerRequest::Message(msg).write(&mut peer_writer).unwrap();
+                        info!("Sent message {} to peer at {}", msg_id, peer_addr);
 
                         let mut response = String::new();
                         peer_reader.read_line(&mut response).unwrap();
+                        // refresh frontend after success
                         if let Ok(PeerToPeerResponse::Recieved(msg_id)) = serde_json::from_str::<PeerToPeerResponse>(&response) {
                             db_conn.mark_as_recieved(msg_id).unwrap();
                         } else {
@@ -314,6 +317,7 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
                         peer_reader.read_line(&mut response).unwrap();
                         if let Ok(PeerToPeerResponse::AcceptConnection(self_id, peer_name, peer_addr)) = serde_json::from_str::<PeerToPeerResponse>(&response) {
                             db_conn.insert_connection(Connection::new(peer_id, self_id, peer_name, peer_addr)).unwrap();
+                            // todo: refresh fontend after success
                         } else {
                             error!("Couldn't establish connection with peer {}; Invalid peer response", peer_addr)
                         }
