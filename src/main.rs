@@ -146,6 +146,7 @@ fn get_listener<A: ToSocketAddrs>(addr: A) -> Result<TcpListener, Box<dyn Error>
 }
 
 fn listen(listener: TcpListener, setttings: Setttings) {
+    let mut frontend_addr = None;
     let mut frontend_thread: Option<JoinHandle<_>> = None;
     for incoming in listener.incoming() {
         let conn: TcpStream;
@@ -166,6 +167,8 @@ fn listen(listener: TcpListener, setttings: Setttings) {
 
         let addr = conn.peer_addr().unwrap();
 
+        let mut conn_updates = false;
+
         // rework this into a general request handling pattern
         let mut initial_request = String::new();
         reader.read_line(&mut initial_request).unwrap();
@@ -173,7 +176,7 @@ fn listen(listener: TcpListener, setttings: Setttings) {
         if peer_request_result.is_ok() {
             info!("New peer connection: {}", addr);            
             thread::spawn(move || {
-                handle_peer(conn, peer_request_result.unwrap(), setttings);
+                handle_peer(conn, peer_request_result.unwrap(), setttings, &mut conn_updates, frontend_addr);
             });
         } else {
             if let Some(ref handle) = frontend_thread {
@@ -187,9 +190,10 @@ fn listen(listener: TcpListener, setttings: Setttings) {
             }
 
             if let Ok(BackendToFrontendRequest::LinkingRequest) = serde_json::from_str::<BackendToFrontendRequest>(&initial_request) {
-                info!("New frontend connection: {}", addr);            
+                info!("New frontend connection: {}", addr); 
+                frontend_addr = Some(addr);           
                 frontend_thread = Some(thread::spawn(move || {
-                    handle_frontend(conn, setttings);
+                    handle_frontend(conn, setttings, &mut conn_updates);
                 }));
             } else {
                 warn!("Incorrect request: {:?}", initial_request);
@@ -199,7 +203,7 @@ fn listen(listener: TcpListener, setttings: Setttings) {
     }
 }
 
-fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Setttings) {
+fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Setttings, conn_updates: &mut bool, fontend_addr: Option<SocketAddr>) {
     let peer_addr = conn.peer_addr().unwrap();
     debug!("Handling peer at {}", peer_addr);
     let mut peer_writer = BufWriter::new(conn.try_clone().unwrap());
@@ -215,6 +219,13 @@ fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Sett
             db_conn.insert_connection(Connection::new(peer_id, self_id, peer_name, peer_addr)).unwrap();
             PeerToPeerResponse::AcceptConnection(peer_id, setttings.self_name.to_owned(), local_addr).write(&mut peer_writer).unwrap();
             info!("Accepted peer connection from {}", peer_addr);
+            if *conn_updates {
+                if let Some(addr) = fontend_addr {
+                    let fontend_conn = TcpStream::connect(addr).expect("couldn't connect to frontend while refreshing connections");
+                    let mut frontend_writer = BufWriter::new(fontend_conn.try_clone().unwrap());
+                    BackendToFrontendResponse::NewConnection.write(&mut frontend_writer).unwrap();
+                }
+            }
         },
         PeerToPeerRequest::Message(msg) => {
             PeerToPeerResponse::Recieved(msg.message_id).write(&mut peer_writer).unwrap();
@@ -229,7 +240,7 @@ fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Sett
     }
 }
 
-fn handle_frontend(conn: TcpStream, setttings: Setttings) {
+fn handle_frontend(conn: TcpStream, setttings: Setttings, conn_updates: &mut bool) {
     let frontend_addr = conn.peer_addr().unwrap();
     debug!("Handling frontend at {}", frontend_addr);
     let db_conn = DbConn::new(rusqlite::Connection::open(setttings.db_path).unwrap());
@@ -284,6 +295,9 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
                             error!("Invalid peer response from {}: {}", peer_addr, &response);
                         }
                     }
+                    BackendToFrontendRequest::ToggleAwaitingNewConnections => {
+                        *conn_updates = !*conn_updates;
+                    }
                     BackendToFrontendRequest::ListPeerConnections => {
                         BackendToFrontendResponse::PeerConnectionsListed(
                             db_conn.get_connections().unwrap()
@@ -317,7 +331,6 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
                         peer_reader.read_line(&mut response).unwrap();
                         if let Ok(PeerToPeerResponse::AcceptConnection(self_id, peer_name, peer_addr)) = serde_json::from_str::<PeerToPeerResponse>(&response) {
                             db_conn.insert_connection(Connection::new(peer_id, self_id, peer_name, peer_addr)).unwrap();
-                            // todo: refresh fontend after success
                         } else {
                             error!("Couldn't establish connection with peer {}; Invalid peer response", peer_addr)
                         }

@@ -12,6 +12,9 @@ use time::{OffsetDateTime, format_description};
 use rand::rngs::OsRng;
 use rand_unique::RandomSequenceBuilder;
 
+// todo: get_reader_writer(conn: TcpStream)
+// todo: Readable trait
+
 pub const DATETIME_FORMAT: &str = "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3][offset_hour]:[offset_minute]";
 
 pub trait Writable {
@@ -33,6 +36,7 @@ pub enum BackendToFrontendRequest {
     ListMessages(u32, OffsetDateTime, OffsetDateTime),
     ListPeerConnections,
     MessagePeer((u32, MessageContent)),
+    ToggleAwaitingNewConnections
 }
 impl Writable for BackendToFrontendRequest {}
 
@@ -42,6 +46,7 @@ pub enum BackendToFrontendResponse {
     PeerConnectionsListed(Vec<Connection>),
     MessagesListed(Vec<Message>),
     InvalidRequest,
+    NewConnection
 }
 impl Writable for BackendToFrontendResponse {}
 

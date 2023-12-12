@@ -1,4 +1,4 @@
-use std::{io::{stdin, BufWriter, prelude::*, BufReader, stdout}, net::{TcpStream, SocketAddr}, env};
+use std::{io::{stdin, BufWriter, prelude::*, BufReader, stdout}, net::{TcpStream, SocketAddr}, env, thread, sync::{Arc, Mutex}};
 use ap2pmsg::*;
 use crossterm::{cursor::{SavePosition, RestorePosition}, ExecutableCommand};
 use time::OffsetDateTime;
@@ -19,7 +19,7 @@ fn main() {
     let serv_conn = TcpStream::connect(backend_addr).unwrap_or_else(|e| { panic!("ERROR: Could not connect to backend, {}", e) });
 
     let mut serv_writer = BufWriter::new(serv_conn.try_clone().unwrap());
-    let mut serv_reader = BufReader::new(serv_conn);
+    let mut serv_reader = BufReader::new(serv_conn.try_clone().unwrap());
 
     BackendToFrontendRequest::LinkingRequest.write(&mut serv_writer).unwrap();
 
@@ -42,49 +42,72 @@ fn main() {
         print!("\x1b[2J\x1b[1;1H");
         match input_mode {
             InputMode::SelectConnection => {
-                BackendToFrontendRequest::ListPeerConnections.write(&mut serv_writer).unwrap();
-
-                let mut response = String::new();
-                serv_reader.read_line(&mut response).unwrap();
-                if let Ok(BackendToFrontendResponse::PeerConnectionsListed(mut connections)) = serde_json::from_str::<BackendToFrontendResponse>(&response) {
-                    let mut index = 0;
-                    if connections.is_empty() {
-                        println!("No connections");
-                    }
-
-                    connections.dedup_by(|a, b| a.peer_addr == b.peer_addr && a.peer_name == b.peer_name );
-                    for conn in &connections {
-                        println!("{}) {}: {}", index, conn.peer_name, conn.peer_addr);
-                        index += 1;
-                    }
-                    println!("Type '+' to add a connection");
+                let conns = Arc::new(Mutex::new(Vec::new()));
+                let serv_conn_clone = serv_conn.try_clone().unwrap();
+                let conns_clone = conns.clone();
+                thread::spawn(move || {
+                    let mut serv_writer = BufWriter::new(serv_conn_clone.try_clone().unwrap());
+                    let mut serv_reader = BufReader::new(serv_conn_clone);
+                    
+                    
+                    BackendToFrontendRequest::ToggleAwaitingNewConnections.write(&mut serv_writer).unwrap();
 
                     loop {
-                        print!("\nSelect device: ");
-                        stdout().flush().unwrap();
-                        input = String::new();
-                        stdin().read_line(&mut input).unwrap();
-                        
-                        if let Ok(i) = input.trim().parse::<usize>() {
-                            if i + 1 > connections.len() {
-                                println!("Invalid index; index out of range.");
-                                continue;
+                        BackendToFrontendRequest::ListPeerConnections.write(&mut serv_writer).unwrap();
+
+                        let mut response = String::new();
+                        serv_reader.read_line(&mut response).unwrap();
+                        if let Ok(BackendToFrontendResponse::PeerConnectionsListed(mut connections)) = serde_json::from_str::<BackendToFrontendResponse>(&response) {
+                            let mut index = 0;
+                            if connections.is_empty() {
+                                println!("No connections");
                             }
-                            peer_conn = Some(connections[i].clone());
-                            input_mode = InputMode::Message;
-                            break;
+            
+                            connections.dedup_by(|a, b| a.peer_addr == b.peer_addr && a.peer_name == b.peer_name );
+                            for conn in &connections {
+                                println!("{}) {}: {}", index, conn.peer_name, conn.peer_addr);
+                                index += 1;
+                            }
+            
+                            *conns_clone.lock().unwrap() = connections;
                         } else {
-                            println!("{}", input);
-                            if input.trim() == "+" {
-                                input_mode = InputMode::AddConnection;
-                                break;
-                            }
-                            println!("Invalid index; index not a number.");
+                            panic!("ERROR: Couldn't list connections; Invalid backend response: {}", response)
+                        }
+
+                        let mut response = String::new();
+                        serv_reader.read_line(&mut response).unwrap();
+                        if let Ok(BackendToFrontendResponse::NewConnection) = serde_json::from_str::<BackendToFrontendResponse>(&response) {
                             continue;
-                        }          
+                        } else {
+                            panic!("ERROR: Couldn't refresh connections; Invalid backend response: {}", response)
+                        }
                     }
-                } else {
-                    panic!("ERROR: Couldn't list connections; Invalid backend response: {}", response)
+                });
+
+                loop {
+                    // todo: chnage to crossterm key event
+                    println!("Type '+' to add a connection");
+                    println!("\nSelect device: ");
+                    input = String::new();
+                    stdin().read_line(&mut input).unwrap();
+                    let conns = conns.lock().unwrap();
+                    if let Ok(i) = input.trim().parse::<usize>() {
+                        if i + 1 > conns.len() {
+                            println!("Invalid index; index out of range.");
+                            continue;
+                        }
+                        peer_conn = Some(conns[i].clone());
+                        input_mode = InputMode::Message;
+                        BackendToFrontendRequest::ToggleAwaitingNewConnections.write(&mut serv_writer).unwrap();
+                        break;
+                    } else {
+                        if input.trim() == "+" {
+                            input_mode = InputMode::AddConnection;
+                            break;
+                        }
+                        println!("Invalid index; index not a number.");
+                        continue;
+                    }          
                 }
             },
             InputMode::AddConnection => {
