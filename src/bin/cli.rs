@@ -1,6 +1,6 @@
-use std::{io::{stdin, BufWriter, prelude::*, BufReader, stdout}, net::{TcpStream, SocketAddr}, env, thread, sync::{Arc, Mutex}};
+use std::{io::{stdin, BufWriter, prelude::*, BufReader, stdout}, net::{TcpStream, SocketAddr}, env, thread, sync::{Arc, Mutex}, str::from_utf8};
 use ap2pmsg::*;
-use crossterm::{cursor::{SavePosition, RestorePosition}, ExecutableCommand};
+use crossterm::{cursor::{SavePosition, RestorePosition, MoveTo}, ExecutableCommand};
 use time::OffsetDateTime;
 
 enum InputMode {
@@ -42,18 +42,17 @@ fn main() {
         print!("\x1b[2J\x1b[1;1H");
         match input_mode {
             InputMode::SelectConnection => {
-                let conns = Arc::new(Mutex::new(Vec::new()));
+                let conns: Arc<Mutex<Vec<Connection>>> = Arc::new(Mutex::new(Vec::new()));
                 let serv_conn_clone = serv_conn.try_clone().unwrap();
                 let conns_clone = conns.clone();
                 thread::spawn(move || {
                     let mut serv_writer = BufWriter::new(serv_conn_clone.try_clone().unwrap());
                     let mut serv_reader = BufReader::new(serv_conn_clone);
-                    
-                    
-                    BackendToFrontendRequest::ToggleAwaitingNewConnections.write(&mut serv_writer).unwrap();
 
-                    loop {
-                        BackendToFrontendRequest::ListPeerConnections.write(&mut serv_writer).unwrap();
+                    fn print_connections(serv_writer: &mut BufWriter<TcpStream>, serv_reader: &mut BufReader<TcpStream>, conns: &Arc<Mutex<Vec<Connection>>>) {
+                        let conns_clone = conns.clone();
+                        
+                        BackendToFrontendRequest::ListPeerConnections.write(serv_writer).unwrap();
 
                         let mut response = String::new();
                         serv_reader.read_line(&mut response).unwrap();
@@ -64,6 +63,7 @@ fn main() {
                             }
             
                             connections.dedup_by(|a, b| a.peer_addr == b.peer_addr && a.peer_name == b.peer_name );
+                            stdout().execute(MoveTo(0, 3)).unwrap();
                             for conn in &connections {
                                 println!("{}) {}: {}", index, conn.peer_name, conn.peer_addr);
                                 index += 1;
@@ -73,19 +73,31 @@ fn main() {
                         } else {
                             panic!("ERROR: Couldn't list connections; Invalid backend response: {}", response)
                         }
+                    }
+                    print_connections(&mut serv_writer, &mut serv_reader, &conns_clone);
+                                        
+                    loop {
+                        let response = from_utf8(serv_reader.fill_buf().unwrap()).unwrap();
+                        let response_len = response.len();
+                        if let Ok(refresh_request) = serde_json::from_str::<RefreshRequest>(&response) {
+                            match refresh_request {
+                                RefreshRequest::Connection(to_self) => {
+                                    serv_reader.consume(response_len);
 
-                        let mut response = String::new();
-                        serv_reader.read_line(&mut response).unwrap();
-                        if let Ok(BackendToFrontendResponse::NewConnection) = serde_json::from_str::<BackendToFrontendResponse>(&response) {
-                            continue;
-                        } else {
-                            panic!("ERROR: Couldn't refresh connections; Invalid backend response: {}", response)
+                                    if !to_self {
+                                        print_connections(&mut serv_writer, &mut serv_reader, &conns_clone);
+                                    }
+                                },
+                                RefreshRequest::Message(_) => {
+                                    serv_reader.consume(response_len);
+                                }
+                            }
                         }
                     }
                 });
 
                 loop {
-                    // todo: chnage to crossterm key event
+                    // todo: change to crossterm key event
                     println!("Type '+' to add a connection");
                     println!("\nSelect device: ");
                     input = String::new();
@@ -98,7 +110,6 @@ fn main() {
                         }
                         peer_conn = Some(conns[i].clone());
                         input_mode = InputMode::Message;
-                        BackendToFrontendRequest::ToggleAwaitingNewConnections.write(&mut serv_writer).unwrap();
                         break;
                     } else {
                         if input.trim() == "+" {

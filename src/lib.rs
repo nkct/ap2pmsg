@@ -29,14 +29,22 @@ pub trait Writable {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub enum RefreshRequest {
+    // the bool signifies that the request was caused by self and that the is no need to update
+    Connection(bool),
+    Message(bool)
+}
+impl Writable for RefreshRequest {}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub enum BackendToFrontendRequest {
     // close server
+    // clear data
     LinkingRequest,
     EstablishPeerConnection(SocketAddr),
     ListMessages(u32, OffsetDateTime, OffsetDateTime),
     ListPeerConnections,
     MessagePeer((u32, MessageContent)),
-    ToggleAwaitingNewConnections
 }
 impl Writable for BackendToFrontendRequest {}
 
@@ -46,7 +54,6 @@ pub enum BackendToFrontendResponse {
     PeerConnectionsListed(Vec<Connection>),
     MessagesListed(Vec<Message>),
     InvalidRequest,
-    NewConnection
 }
 impl Writable for BackendToFrontendResponse {}
 
