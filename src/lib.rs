@@ -1,11 +1,11 @@
 use std::{
     net::{SocketAddr, TcpStream}, 
-    io::{BufWriter, self, Write, BufReader}, 
+    io::{BufWriter, self, Write, BufReader, Read}, 
     error::Error, 
     fmt::Display, 
     string, 
     fs::File, 
-    path::Path, 
+    path::Path, str::from_utf8, 
 };
 use serde::{Serialize, Deserialize};
 use time::{OffsetDateTime, format_description};
@@ -13,28 +13,53 @@ use rand::rngs::OsRng;
 use rand_unique::RandomSequenceBuilder;
 
 // todo: get_reader_writer(conn: TcpStream)
-// todo: Readable trait
 
 pub const DATETIME_FORMAT: &str = "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3][offset_hour]:[offset_minute]";
 
 pub trait Writable {
-    fn write(&self, writer: &mut BufWriter<TcpStream>) -> Result<(), io::Error> where Self: Serialize {
-        let send = serde_json::to_string(
-            self
-        )? + "\n";
-        writer.write(send.as_bytes())?;
+    fn write_into(&self, writer: &mut BufWriter<TcpStream>) -> Result<(), io::Error> where Self: Serialize {
+        let message = serde_json::to_string(self)?;
+        let len = message.len() as u32;
+        let mut send = Vec::new();
+        send.extend_from_slice(&len.to_be_bytes());
+        send.extend_from_slice(&message.as_bytes());
+        writer.write(&send)?;
         writer.flush()?;
+        println!("Wrote: {:?} with length {}", message, len);
         Ok(())
+    }
+}
+
+pub trait Readable {
+    fn read_from(reader: &mut BufReader<TcpStream>) -> Result<Self, Box<dyn Error>> 
+    where Self: Sized + for<'a> Deserialize<'a> {
+        println!("reading {}", std::any::type_name::<Self>());
+        let mut len = [0;4];
+        println!("{:#?}", reader);
+        reader.read_exact(&mut len)?;
+        println!("len: {}", u32::from_be_bytes(len));
+        let mut buf = vec![0; u32::from_be_bytes(len) as usize];
+        reader.read_exact(&mut buf)?;
+        println!("Read {} with length {}", from_utf8(&buf)?, u32::from_be_bytes(len));
+        Ok(serde_json::from_str::<Self>(from_utf8(&buf)?)?) 
     }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RefreshRequest {
-    // the bool signifies that the request was caused by self and that the is no need to update
-    Connection(bool),
-    Message(bool)
+    Connection,
+    Message
 }
 impl Writable for RefreshRequest {}
+impl Readable for RefreshRequest {}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum InitialRequest {
+    Frontend(BackendToFrontendRequest),
+    Peer(PeerToPeerRequest)
+}
+impl Writable for InitialRequest {}
+impl Readable for InitialRequest {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum BackendToFrontendRequest {
@@ -47,6 +72,7 @@ pub enum BackendToFrontendRequest {
     MessagePeer((u32, MessageContent)),
 }
 impl Writable for BackendToFrontendRequest {}
+impl Readable for BackendToFrontendRequest {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum BackendToFrontendResponse {
@@ -56,6 +82,7 @@ pub enum BackendToFrontendResponse {
     InvalidRequest,
 }
 impl Writable for BackendToFrontendResponse {}
+impl Readable for BackendToFrontendResponse {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum PeerToPeerRequest {
@@ -63,6 +90,7 @@ pub enum PeerToPeerRequest {
     Message(Message),
 }
 impl Writable for PeerToPeerRequest {}
+impl Readable for PeerToPeerRequest {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum PeerToPeerResponse {
@@ -70,6 +98,7 @@ pub enum PeerToPeerResponse {
     Recieved(u32),
 }
 impl Writable for PeerToPeerResponse {}
+impl Readable for PeerToPeerResponse {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum MessageContent {

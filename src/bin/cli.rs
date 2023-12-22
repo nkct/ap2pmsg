@@ -1,6 +1,6 @@
 use std::{io::{stdin, BufWriter, prelude::*, BufReader, stdout}, net::{TcpStream, SocketAddr}, env, thread, sync::{Arc, Mutex}, str::from_utf8};
 use ap2pmsg::*;
-use crossterm::{cursor::{SavePosition, RestorePosition, MoveTo}, ExecutableCommand};
+use crossterm::{cursor::{SavePosition, RestorePosition}, ExecutableCommand};
 use time::OffsetDateTime;
 
 enum InputMode {
@@ -21,11 +21,9 @@ fn main() {
     let mut serv_writer = BufWriter::new(serv_conn.try_clone().unwrap());
     let mut serv_reader = BufReader::new(serv_conn.try_clone().unwrap());
 
-    BackendToFrontendRequest::LinkingRequest.write(&mut serv_writer).unwrap();
+    InitialRequest::Frontend(BackendToFrontendRequest::LinkingRequest).write_into(&mut serv_writer).unwrap();
 
-    let mut response = String::new();
-    serv_reader.read_line(&mut response).unwrap();
-    if let Ok(BackendToFrontendResponse::LinkingResult(response)) = serde_json::from_str::<BackendToFrontendResponse>(&response) {
+    if let Ok(BackendToFrontendResponse::LinkingResult(response)) = BackendToFrontendResponse::read_from(&mut serv_reader) {
         match response {
             Ok(()) => { println!("Connection with backend succesfully established") },
             Err(e) => { panic!("ERROR: {}", e) }
@@ -50,20 +48,18 @@ fn main() {
                     let mut serv_reader = BufReader::new(serv_conn_clone);
 
                     fn print_connections(serv_writer: &mut BufWriter<TcpStream>, serv_reader: &mut BufReader<TcpStream>, conns: &Arc<Mutex<Vec<Connection>>>) {
+                        println!("printing  connections");
                         let conns_clone = conns.clone();
                         
-                        BackendToFrontendRequest::ListPeerConnections.write(serv_writer).unwrap();
+                        BackendToFrontendRequest::ListPeerConnections.write_into(serv_writer).unwrap();
 
-                        let mut response = String::new();
-                        serv_reader.read_line(&mut response).unwrap();
-                        if let Ok(BackendToFrontendResponse::PeerConnectionsListed(mut connections)) = serde_json::from_str::<BackendToFrontendResponse>(&response) {
+                        if let Ok(BackendToFrontendResponse::PeerConnectionsListed(mut connections)) = BackendToFrontendResponse::read_from(serv_reader) {
                             let mut index = 0;
                             if connections.is_empty() {
                                 println!("No connections");
                             }
             
                             connections.dedup_by(|a, b| a.peer_addr == b.peer_addr && a.peer_name == b.peer_name );
-                            stdout().execute(MoveTo(0, 3)).unwrap();
                             for conn in &connections {
                                 println!("{}) {}: {}", index, conn.peer_name, conn.peer_addr);
                                 index += 1;
@@ -71,27 +67,31 @@ fn main() {
             
                             *conns_clone.lock().unwrap() = connections;
                         } else {
-                            panic!("ERROR: Couldn't list connections; Invalid backend response: {}", response)
+                            panic!("ERROR: Couldn't list connections; Invalid backend response")
                         }
                     }
                     print_connections(&mut serv_writer, &mut serv_reader, &conns_clone);
-                                        
+ 
                     loop {
-                        let response = from_utf8(serv_reader.fill_buf().unwrap()).unwrap();
+                        println!("attempting to fill buffer");
+                        println!("{:#?}", serv_reader);
+                        let response = serv_reader.fill_buf().unwrap();
+                        println!("response: {:?}", from_utf8(&response[4..]).unwrap());
                         let response_len = response.len();
-                        if let Ok(refresh_request) = serde_json::from_str::<RefreshRequest>(&response) {
+                        if let Ok(refresh_request) = serde_json::from_str::<RefreshRequest>(from_utf8(&response[4..]).unwrap()) {
                             match refresh_request {
-                                RefreshRequest::Connection(to_self) => {
+                                RefreshRequest::Connection => {
                                     serv_reader.consume(response_len);
 
-                                    if !to_self {
-                                        print_connections(&mut serv_writer, &mut serv_reader, &conns_clone);
-                                    }
+                                    print_connections(&mut serv_writer, &mut serv_reader, &conns_clone);
                                 },
-                                RefreshRequest::Message(_) => {
+                                RefreshRequest::Message => {
                                     serv_reader.consume(response_len);
                                 }
                             }
+                        } else {
+                            println!("killing refresher");
+                            break;
                         }
                     }
                 });
@@ -138,16 +138,14 @@ fn main() {
                     }
                 }                
 
-                BackendToFrontendRequest::EstablishPeerConnection(peer_addr).write(&mut serv_writer).unwrap();
+                BackendToFrontendRequest::EstablishPeerConnection(peer_addr).write_into(&mut serv_writer).unwrap();
                 input_mode = InputMode::SelectConnection;
             },
             InputMode::Message => {
                 if let Some(ref peer_conn) = peer_conn {
-                    BackendToFrontendRequest::ListMessages(peer_conn.peer_id, OffsetDateTime::UNIX_EPOCH, get_now()).write(&mut serv_writer).unwrap();
+                    BackendToFrontendRequest::ListMessages(peer_conn.peer_id, OffsetDateTime::UNIX_EPOCH, get_now()).write_into(&mut serv_writer).unwrap();
 
-                    let mut response = String::new();
-                    serv_reader.read_line(&mut response).unwrap();
-                    if let Ok(BackendToFrontendResponse::MessagesListed(messages)) = serde_json::from_str::<BackendToFrontendResponse>(&response) {
+                    if let Ok(BackendToFrontendResponse::MessagesListed(messages)) = BackendToFrontendResponse::read_from(&mut serv_reader) {
                         for message in messages {
                             match message.content {
                                 MessageContent::Text(text) => {
@@ -158,7 +156,7 @@ fn main() {
                         }
                         println!("");
                     } else {
-                        panic!("ERROR: Couldn't list messages; Invalid backend response: {}", response)
+                        panic!("ERROR: Couldn't list messages; Invalid backend response")
                     }
                     
 
@@ -178,7 +176,7 @@ fn main() {
                     BackendToFrontendRequest::MessagePeer((
                         peer_conn.peer_id, 
                         MessageContent::Text(input.to_string())
-                    )).write(&mut serv_writer).unwrap();
+                    )).write_into(&mut serv_writer).unwrap();
                 } else {
                     panic!("ERROR: attempted to write message without a selected connection");
                 }

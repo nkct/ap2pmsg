@@ -1,13 +1,12 @@
 use std::{
     thread::{self, JoinHandle},
-    io::{prelude::*, BufReader, BufWriter, self, stdin, ErrorKind},
+    io::{BufReader, BufWriter, self, stdin, ErrorKind},
     net::{TcpListener, ToSocketAddrs, SocketAddr, TcpStream}, 
     error::Error, 
     env, 
     process::{Command, ExitCode}, 
     time::Duration
 };
-use serde_json;
 use env_logger;
 use log::{error, warn, info, debug};
 use local_ip_address::local_ip;
@@ -167,43 +166,43 @@ fn listen(listener: TcpListener, setttings: Setttings) {
 
         let addr = conn.peer_addr().unwrap();
 
-
-        // rework this into a general request handling pattern
-        let mut initial_request = String::new();
-        reader.read_line(&mut initial_request).unwrap();
-        let peer_request_result = serde_json::from_str::<PeerToPeerRequest>(&initial_request);
-        if peer_request_result.is_ok() {
-            info!("New peer connection: {}", addr);       
-            let frontend_conn_clone;
-            if let Some(ref conn) = frontend_conn {
-                frontend_conn_clone = Some(conn.try_clone().unwrap());
-            } else {
-                frontend_conn_clone = None;
-            }
-            thread::spawn(move || {
-                handle_peer(conn, peer_request_result.unwrap(), setttings, frontend_conn_clone);
-            });
-        } else {
-            if let Some(ref handle) = frontend_thread {
-                if !handle.is_finished() {
-                    BackendToFrontendResponse::LinkingResult(Err(format!(
-                        "Linking to backend refused; this backend is already serving a frontend at {}", addr
-                    ))).write(&mut writer).unwrap();
-                    info!("Refused linking request from frontend at {}", addr);
-                    break;
+        if let Ok(initial_request) = InitialRequest::read_from(&mut reader) {
+            match initial_request {
+                InitialRequest::Peer(peer_request) => {
+                    info!("New peer connection: {}", addr);       
+                    let frontend_conn_clone;
+                    if let Some(ref conn) = frontend_conn {
+                        frontend_conn_clone = Some(conn.try_clone().unwrap());
+                    } else {
+                        frontend_conn_clone = None;
+                    }
+                    thread::spawn(move || {
+                        handle_peer(conn, peer_request, setttings, frontend_conn_clone);
+                    });
+                },
+                InitialRequest::Frontend(frontend_request) => {
+                    if let Some(ref handle) = frontend_thread {
+                        if !handle.is_finished() {
+                            BackendToFrontendResponse::LinkingResult(Err(format!(
+                                "Linking to backend refused; this backend is already serving a frontend at {}", addr
+                            ))).write_into(&mut writer).unwrap();
+                            info!("Refused linking request from frontend at {}", addr);
+                            break;
+                        }
+                    }
+        
+                    if let BackendToFrontendRequest::LinkingRequest = frontend_request {
+                        info!("New frontend connection: {}", addr); 
+                        frontend_conn = Some(conn.try_clone().unwrap());           
+                        frontend_thread = Some(thread::spawn(move || {
+                            handle_frontend(conn, setttings);
+                        }));
+                    }
                 }
             }
-
-            if let Ok(BackendToFrontendRequest::LinkingRequest) = serde_json::from_str::<BackendToFrontendRequest>(&initial_request) {
-                info!("New frontend connection: {}", addr); 
-                frontend_conn = Some(conn.try_clone().unwrap());           
-                frontend_thread = Some(thread::spawn(move || {
-                    handle_frontend(conn, setttings);
-                }));
-            } else {
-                warn!("Incorrect request: {:?}", initial_request);
-                continue;
-            }
+        } else {
+            warn!("Incorrect request");
+            continue;
         }
     }
 }
@@ -222,15 +221,17 @@ fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Sett
             let peer_id = db_conn.generate_peer_id().unwrap();
 
             db_conn.insert_connection(Connection::new(peer_id, self_id, peer_name, peer_addr)).unwrap();
-            PeerToPeerResponse::AcceptConnection(peer_id, setttings.self_name.to_owned(), local_addr).write(&mut peer_writer).unwrap();
+            PeerToPeerResponse::AcceptConnection(peer_id, setttings.self_name.to_owned(), local_addr).write_into(&mut peer_writer).unwrap();
             info!("Accepted peer connection from {}", peer_addr);
             if let Some(conn) = fontend_conn {
                 let mut frontend_writer = BufWriter::new(conn);
-                RefreshRequest::Connection(peer_addr == local_addr).write(&mut frontend_writer).unwrap();
+                if peer_addr != local_addr {
+                    RefreshRequest::Connection.write_into(&mut frontend_writer).unwrap();
+                }
             }
         },
         PeerToPeerRequest::Message(msg) => {
-            PeerToPeerResponse::Recieved(msg.message_id).write(&mut peer_writer).unwrap();
+            PeerToPeerResponse::Recieved(msg.message_id).write_into(&mut peer_writer).unwrap();
             info!("Confirmed recieving message {} from {}", msg.message_id, peer_addr);
             // handle edge case where a host is sending a message to itself
             if (db_conn.get_peer_addr(msg.self_id).unwrap() == local_addr) && (db_conn.get_message(msg.message_id).unwrap().is_some()) {
@@ -251,23 +252,11 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
     let mut frontend_reader = BufReader::new(conn.try_clone().unwrap());
 
 
-    BackendToFrontendResponse::LinkingResult(Ok(())).write(&mut frontend_writer).unwrap();
+    BackendToFrontendResponse::LinkingResult(Ok(())).write_into(&mut frontend_writer).unwrap();
     info!("Confirmed linking for frontend at {}", frontend_addr);
 
     loop {
-        let mut request = String::new();
-        let result = frontend_reader.read_line(&mut request);
-        if result.is_err() || request.is_empty() {
-            let e = result.err();
-            if request.is_empty() || e.as_ref().unwrap().kind() == ErrorKind::ConnectionReset {
-                info!("Frontend at {} has closed the connection", frontend_addr);
-            } else {
-                warn!("{:?}", e.unwrap());
-            }
-            break;
-        }
-
-        match serde_json::from_str::<BackendToFrontendRequest>(&request) {
+        match BackendToFrontendRequest::read_from(&mut frontend_reader) {
             Ok(request) => {
                 debug!("Recieved BackendToFrontendRequest::{:#?}", request);
                 match request {
@@ -285,28 +274,26 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
 
                         let msg = db_conn.new_message(peer_id, content).unwrap();
                         let msg_id = msg.message_id;
-                        PeerToPeerRequest::Message(msg).write(&mut peer_writer).unwrap();
+                        InitialRequest::Peer(PeerToPeerRequest::Message(msg)).write_into(&mut peer_writer).unwrap();
                         info!("Sent message {} to peer at {}", msg_id, peer_addr);
 
-                        let mut response = String::new();
-                        peer_reader.read_line(&mut response).unwrap();
                         // refresh frontend after success
-                        if let Ok(PeerToPeerResponse::Recieved(msg_id)) = serde_json::from_str::<PeerToPeerResponse>(&response) {
+                        if let Ok(PeerToPeerResponse::Recieved(msg_id)) = PeerToPeerResponse::read_from(&mut peer_reader) {
                             db_conn.mark_as_recieved(msg_id).unwrap();
                         } else {
-                            error!("Invalid peer response from {}: {}", peer_addr, &response);
+                            error!("Invalid peer response from {}", peer_addr);
                         }
                     }
                     BackendToFrontendRequest::ListPeerConnections => {
                         BackendToFrontendResponse::PeerConnectionsListed(
                             db_conn.get_connections().unwrap()
-                        ).write(&mut frontend_writer).unwrap();
+                        ).write_into(&mut frontend_writer).unwrap();
                         info!("Listed peer connections");
                     }
                     BackendToFrontendRequest::ListMessages(peer_id, since, untill) => {
                         BackendToFrontendResponse::MessagesListed(
                             db_conn.get_messages(peer_id, since, untill).unwrap()
-                        ).write(&mut frontend_writer).unwrap();
+                        ).write_into(&mut frontend_writer).unwrap();
                         info!("Listed messages");
                     }
                     BackendToFrontendRequest::EstablishPeerConnection(peer_addr) => {
@@ -323,12 +310,10 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
                         
                         let peer_id = db_conn.generate_peer_id().unwrap();
 
-                        PeerToPeerRequest::ProposeConnection(peer_id, setttings.self_name.to_owned(), conn.local_addr().unwrap()).write(&mut peer_writer).unwrap();
+                        InitialRequest::Peer(PeerToPeerRequest::ProposeConnection(peer_id, setttings.self_name.to_owned(), conn.local_addr().unwrap())).write_into(&mut peer_writer).unwrap();
                         info!("Proposed connection to {}", peer_addr);
 
-                        let mut response = String::new();
-                        peer_reader.read_line(&mut response).unwrap();
-                        if let Ok(PeerToPeerResponse::AcceptConnection(self_id, peer_name, peer_addr)) = serde_json::from_str::<PeerToPeerResponse>(&response) {
+                        if let Ok(PeerToPeerResponse::AcceptConnection(self_id, peer_name, peer_addr)) = PeerToPeerResponse::read_from(&mut peer_reader) {
                             db_conn.insert_connection(Connection::new(peer_id, self_id, peer_name, peer_addr)).unwrap();
                         } else {
                             error!("Couldn't establish connection with peer {}; Invalid peer response", peer_addr)
@@ -340,8 +325,8 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
                 }
             },
             Err(e) => {
-                error!("Invalid request \n{} \n{:#?}", e, request);
-                BackendToFrontendResponse::InvalidRequest.write(&mut frontend_writer).unwrap();
+                error!("Invalid request: {}", e);
+                BackendToFrontendResponse::InvalidRequest.write_into(&mut frontend_writer).unwrap();
                 continue;
             }
         }
