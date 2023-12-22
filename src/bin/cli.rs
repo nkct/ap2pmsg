@@ -1,4 +1,4 @@
-use std::{io::{stdin, BufWriter, prelude::*, BufReader, stdout}, net::{TcpStream, SocketAddr}, env, thread, sync::{Arc, Mutex, atomic::{Ordering, AtomicBool}}, str::from_utf8, time::Duration};
+use std::{io::{stdin, BufWriter, prelude::*, BufReader, stdout, ErrorKind}, net::{TcpStream, SocketAddr}, env, thread, sync::{Arc, Mutex, atomic::{Ordering, AtomicBool}}, str::from_utf8, time::Duration};
 use ap2pmsg::*;
 use crossterm::{cursor::{SavePosition, RestorePosition}, ExecutableCommand};
 use time::OffsetDateTime;
@@ -83,7 +83,7 @@ fn main() {
                         }
                         let response_result = serv_reader.fill_buf();
                         if let Err(e) = response_result {
-                            if e.kind() == std::io::ErrorKind::WouldBlock {
+                            if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut {
                                 continue;
                             } else {
                                 panic!("could not read refresher response: {}", e);
