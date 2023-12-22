@@ -1,4 +1,4 @@
-use std::{io::{stdin, BufWriter, prelude::*, BufReader, stdout}, net::{TcpStream, SocketAddr}, env, thread, sync::{Arc, Mutex}, str::from_utf8};
+use std::{io::{stdin, BufWriter, prelude::*, BufReader, stdout}, net::{TcpStream, SocketAddr}, env, thread, sync::{Arc, Mutex, atomic::{Ordering, AtomicBool}}, str::from_utf8, time::Duration};
 use ap2pmsg::*;
 use crossterm::{cursor::{SavePosition, RestorePosition}, ExecutableCommand};
 use time::OffsetDateTime;
@@ -36,6 +36,8 @@ fn main() {
 
     let mut input;
     let mut input_mode = InputMode::SelectConnection;
+    let mut conn_refr_handle = None;
+    let refresher_stop_flag = Arc::new(AtomicBool::new(false));
     loop {
         print!("\x1b[2J\x1b[1;1H");
         match input_mode {
@@ -43,12 +45,13 @@ fn main() {
                 let conns: Arc<Mutex<Vec<Connection>>> = Arc::new(Mutex::new(Vec::new()));
                 let serv_conn_clone = serv_conn.try_clone().unwrap();
                 let conns_clone = conns.clone();
-                thread::spawn(move || {
+                let refresher_stop_flag_clone = refresher_stop_flag.clone();
+                conn_refr_handle = Some(thread::spawn(move || {
+                    serv_conn_clone.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
                     let mut serv_writer = BufWriter::new(serv_conn_clone.try_clone().unwrap());
-                    let mut serv_reader = BufReader::new(serv_conn_clone);
+                    let mut serv_reader = BufReader::new(serv_conn_clone.try_clone().unwrap());
 
                     fn print_connections(serv_writer: &mut BufWriter<TcpStream>, serv_reader: &mut BufReader<TcpStream>, conns: &Arc<Mutex<Vec<Connection>>>) {
-                        println!("printing  connections");
                         let conns_clone = conns.clone();
                         
                         BackendToFrontendRequest::ListPeerConnections.write_into(serv_writer).unwrap();
@@ -73,10 +76,21 @@ fn main() {
                     print_connections(&mut serv_writer, &mut serv_reader, &conns_clone);
  
                     loop {
-                        println!("attempting to fill buffer");
-                        println!("{:#?}", serv_reader);
-                        let response = serv_reader.fill_buf().unwrap();
-                        println!("response: {:?}", from_utf8(&response[4..]).unwrap());
+                        let response;
+                        if refresher_stop_flag_clone.load(Ordering::Relaxed) {
+                            refresher_stop_flag_clone.store(false, Ordering::Relaxed);
+                            break;
+                        }
+                        let response_result = serv_reader.fill_buf();
+                        if let Err(e) = response_result {
+                            if e.kind() == std::io::ErrorKind::WouldBlock {
+                                continue;
+                            } else {
+                                panic!("could not read refresher response: {}", e);
+                            }
+                        } else {
+                            response = response_result.unwrap();
+                        }
                         let response_len = response.len();
                         if let Ok(refresh_request) = serde_json::from_str::<RefreshRequest>(from_utf8(&response[4..]).unwrap()) {
                             match refresh_request {
@@ -90,11 +104,11 @@ fn main() {
                                 }
                             }
                         } else {
-                            println!("killing refresher");
+                            serv_conn_clone.set_read_timeout(None).unwrap();
                             break;
                         }
                     }
-                });
+                }));
 
                 loop {
                     // todo: change to crossterm key event
@@ -143,6 +157,11 @@ fn main() {
             },
             InputMode::Message => {
                 if let Some(ref peer_conn) = peer_conn {
+                    if let Some(conn_refresher) = conn_refr_handle {
+                        refresher_stop_flag.store(true, Ordering::Relaxed);
+                        conn_refresher.join().unwrap();
+                        conn_refr_handle = None;
+                    }
                     BackendToFrontendRequest::ListMessages(peer_conn.peer_id, OffsetDateTime::UNIX_EPOCH, get_now()).write_into(&mut serv_writer).unwrap();
 
                     if let Ok(BackendToFrontendResponse::MessagesListed(messages)) = BackendToFrontendResponse::read_from(&mut serv_reader) {

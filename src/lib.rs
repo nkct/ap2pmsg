@@ -7,6 +7,7 @@ use std::{
     fs::File, 
     path::Path, str::from_utf8, 
 };
+use log::debug;
 use serde::{Serialize, Deserialize};
 use time::{OffsetDateTime, format_description};
 use rand::rngs::OsRng;
@@ -18,6 +19,7 @@ pub const DATETIME_FORMAT: &str = "[year]-[month]-[day]T[hour]:[minute]:[second]
 
 pub trait Writable {
     fn write_into(&self, writer: &mut BufWriter<TcpStream>) -> Result<(), io::Error> where Self: Serialize {
+        debug!("Writing {}", std::any::type_name::<Self>());
         let message = serde_json::to_string(self)?;
         let len = message.len() as u32;
         let mut send = Vec::new();
@@ -25,7 +27,7 @@ pub trait Writable {
         send.extend_from_slice(&message.as_bytes());
         writer.write(&send)?;
         writer.flush()?;
-        println!("Wrote: {:?} with length {}", message, len);
+        debug!("Wrote: {:?} with length {}", message, len);
         Ok(())
     }
 }
@@ -33,14 +35,12 @@ pub trait Writable {
 pub trait Readable {
     fn read_from(reader: &mut BufReader<TcpStream>) -> Result<Self, Box<dyn Error>> 
     where Self: Sized + for<'a> Deserialize<'a> {
-        println!("reading {}", std::any::type_name::<Self>());
+        debug!("Reading {}", std::any::type_name::<Self>());
         let mut len = [0;4];
-        println!("{:#?}", reader);
         reader.read_exact(&mut len)?;
-        println!("len: {}", u32::from_be_bytes(len));
         let mut buf = vec![0; u32::from_be_bytes(len) as usize];
         reader.read_exact(&mut buf)?;
-        println!("Read {} with length {}", from_utf8(&buf)?, u32::from_be_bytes(len));
+        debug!("Read {} with length {}", from_utf8(&buf)?, u32::from_be_bytes(len));
         Ok(serde_json::from_str::<Self>(from_utf8(&buf)?)?) 
     }
 }
