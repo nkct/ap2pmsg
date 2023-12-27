@@ -141,6 +141,11 @@ fn main() {
                         continue;
                     }          
                 }
+
+                if let Some(conn_refresher) = conn_refr_handle {
+                    BackendToFrontendRequest::KillRefresher.write_into(&mut serv_writer).unwrap();
+                    conn_refresher.join().unwrap();
+                }
             },
             InputMode::AddConnection => {
                 println!("Add connection");
@@ -164,11 +169,6 @@ fn main() {
             },
             InputMode::Message => {
                 if let Some(ref peer_conn) = peer_conn {
-                    if let Some(conn_refresher) = conn_refr_handle {
-                        BackendToFrontendRequest::KillRefresher.write_into(&mut serv_writer).unwrap();
-                        conn_refresher.join().unwrap();
-                        conn_refr_handle = None;
-                    }
                     BackendToFrontendRequest::ListMessages(peer_conn.peer_id, OffsetDateTime::UNIX_EPOCH, get_now()).write_into(&mut serv_writer).unwrap();
 
                     if let Ok(BackendToFrontendResponse::MessagesListed(messages)) = BackendToFrontendResponse::read_from(&mut serv_reader) {
