@@ -27,7 +27,7 @@ pub trait Writable {
         send.extend_from_slice(&message.as_bytes());
         writer.write(&send)?;
         writer.flush()?;
-        debug!("Wrote: {:?} with length {}", message, len);
+        debug!("Wrote: {} with length {}", message, len);
         Ok(())
     }
 }
@@ -48,7 +48,8 @@ pub trait Readable {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RefreshRequest {
     Connection,
-    Message
+    Message,
+    Kill
 }
 impl Writable for RefreshRequest {}
 impl Readable for RefreshRequest {}
@@ -70,6 +71,7 @@ pub enum BackendToFrontendRequest {
     ListMessages(u32, OffsetDateTime, OffsetDateTime),
     ListPeerConnections,
     MessagePeer((u32, MessageContent)),
+    KillRefresher
 }
 impl Writable for BackendToFrontendRequest {}
 impl Readable for BackendToFrontendRequest {}

@@ -95,6 +95,7 @@ fn main() -> ExitCode {
         FrontendType::CLI => {
             let mut frontend_path = "./frontends/cli";
             if cfg!(debug_assertions) {
+                info!("Building frontend");
                 Command::new("cargo")
                     .args(["build", "--bin", "cli"])
                     .output()
@@ -260,6 +261,10 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
             Ok(request) => {
                 debug!("Recieved BackendToFrontendRequest::{:#?}", request);
                 match request {
+                    BackendToFrontendRequest::KillRefresher => {
+                        RefreshRequest::Kill.write_into(&mut frontend_writer).unwrap();
+                        debug!("Killed refresher");
+                    },
                     BackendToFrontendRequest::MessagePeer((peer_id, content)) => {
                         let peer_addr = &db_conn.get_peer_addr(peer_id).unwrap();
                         let peer_conn_result = TcpStream::connect_timeout(peer_addr, setttings.peer_timeout);

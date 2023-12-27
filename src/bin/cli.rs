@@ -1,4 +1,23 @@
-use std::{io::{stdin, BufWriter, prelude::*, BufReader, stdout, ErrorKind}, net::{TcpStream, SocketAddr}, env, thread, sync::{Arc, Mutex, atomic::{Ordering, AtomicBool}}, str::from_utf8, time::Duration};
+use std::{
+    io::{
+        stdin, 
+        stdout,
+        BufWriter, 
+        prelude::*, 
+        BufReader
+    }, 
+    net::{
+        TcpStream, 
+        SocketAddr
+    }, 
+    env, 
+    thread, 
+    sync::{
+        Arc, 
+        Mutex
+    }, 
+    str::from_utf8
+};
 use ap2pmsg::*;
 use crossterm::{cursor::{SavePosition, RestorePosition}, ExecutableCommand};
 use time::OffsetDateTime;
@@ -37,7 +56,6 @@ fn main() {
     let mut input;
     let mut input_mode = InputMode::SelectConnection;
     let mut conn_refr_handle = None;
-    let refresher_stop_flag = Arc::new(AtomicBool::new(false));
     loop {
         print!("\x1b[2J\x1b[1;1H");
         match input_mode {
@@ -45,11 +63,9 @@ fn main() {
                 let conns: Arc<Mutex<Vec<Connection>>> = Arc::new(Mutex::new(Vec::new()));
                 let serv_conn_clone = serv_conn.try_clone().unwrap();
                 let conns_clone = conns.clone();
-                let refresher_stop_flag_clone = refresher_stop_flag.clone();
                 conn_refr_handle = Some(thread::spawn(move || {
-                    serv_conn_clone.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
                     let mut serv_writer = BufWriter::new(serv_conn_clone.try_clone().unwrap());
-                    let mut serv_reader = BufReader::new(serv_conn_clone.try_clone().unwrap());
+                    let mut serv_reader = BufReader::new(serv_conn_clone);
 
                     fn print_connections(serv_writer: &mut BufWriter<TcpStream>, serv_reader: &mut BufReader<TcpStream>, conns: &Arc<Mutex<Vec<Connection>>>) {
                         let conns_clone = conns.clone();
@@ -76,36 +92,27 @@ fn main() {
                     print_connections(&mut serv_writer, &mut serv_reader, &conns_clone);
  
                     loop {
-                        let response;
-                        if refresher_stop_flag_clone.load(Ordering::Relaxed) {
-                            refresher_stop_flag_clone.store(false, Ordering::Relaxed);
-                            break;
-                        }
-                        let response_result = serv_reader.fill_buf();
-                        if let Err(e) = response_result {
-                            if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut {
-                                continue;
-                            } else {
-                                panic!("could not read refresher response: {}", e);
-                            }
-                        } else {
-                            response = response_result.unwrap();
-                        }
-                        let response_len = response.len();
-                        if let Ok(refresh_request) = serde_json::from_str::<RefreshRequest>(from_utf8(&response[4..]).unwrap()) {
+
+                        let mut len_buf = [0; 4];
+                        serv_reader.read_exact(&mut len_buf).unwrap();
+                        let response_len = u32::from_be_bytes(len_buf) as usize;
+                        let mut response_buf = vec![0; response_len];
+                        serv_reader.read_exact(&mut response_buf).unwrap();
+                        let response = from_utf8(&response_buf).unwrap();
+                        if let Ok(refresh_request) = serde_json::from_str::<RefreshRequest>(response) {
                             match refresh_request {
                                 RefreshRequest::Connection => {
-                                    serv_reader.consume(response_len);
-
                                     print_connections(&mut serv_writer, &mut serv_reader, &conns_clone);
                                 },
                                 RefreshRequest::Message => {
-                                    serv_reader.consume(response_len);
+                                    continue;
+                                },
+                                RefreshRequest::Kill => {
+                                    break;
                                 }
                             }
                         } else {
-                            serv_conn_clone.set_read_timeout(None).unwrap();
-                            break;
+                            panic!("Refresher encountred unexpected message: {response:?}");
                         }
                     }
                 }));
@@ -158,7 +165,7 @@ fn main() {
             InputMode::Message => {
                 if let Some(ref peer_conn) = peer_conn {
                     if let Some(conn_refresher) = conn_refr_handle {
-                        refresher_stop_flag.store(true, Ordering::Relaxed);
+                        BackendToFrontendRequest::KillRefresher.write_into(&mut serv_writer).unwrap();
                         conn_refresher.join().unwrap();
                         conn_refr_handle = None;
                     }
