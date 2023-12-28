@@ -55,7 +55,8 @@ fn main() {
 
     let mut input;
     let mut input_mode = InputMode::SelectConnection;
-    let mut conn_refr_handle = None;
+    let mut conn_refr_handle;
+    let mut msg_refr_handle;
     loop {
         print!("\x1b[2J\x1b[1;1H");
         match input_mode {
@@ -169,21 +170,56 @@ fn main() {
             },
             InputMode::Message => {
                 if let Some(ref peer_conn) = peer_conn {
-                    BackendToFrontendRequest::ListMessages(peer_conn.peer_id, OffsetDateTime::UNIX_EPOCH, get_now()).write_into(&mut serv_writer).unwrap();
+                    let peer_id = peer_conn.peer_id;
+                    let serv_conn_clone = serv_conn.try_clone().unwrap();
+                    msg_refr_handle = Some(thread::spawn(move || {
+                        let mut serv_writer = BufWriter::new(serv_conn_clone.try_clone().unwrap());
+                        let mut serv_reader = BufReader::new(serv_conn_clone);
 
-                    if let Ok(BackendToFrontendResponse::MessagesListed(messages)) = BackendToFrontendResponse::read_from(&mut serv_reader) {
-                        for message in messages {
-                            match message.content {
-                                MessageContent::Text(text) => {
-                                    print!("{}: {}", message.peer_id, text);
-                                    stdout().flush().unwrap();
+                        fn print_messages(serv_writer: &mut BufWriter<TcpStream>, serv_reader: &mut BufReader<TcpStream>, peer_id: u32) {
+                            BackendToFrontendRequest::ListMessages(peer_id, OffsetDateTime::UNIX_EPOCH, get_now()).write_into(serv_writer).unwrap();
+
+                            if let Ok(BackendToFrontendResponse::MessagesListed(messages)) = BackendToFrontendResponse::read_from(serv_reader) {
+                                for message in messages {
+                                    match message.content {
+                                        MessageContent::Text(text) => {
+                                            print!("{}: {}", message.peer_id, text);
+                                            stdout().flush().unwrap();
+                                        }
+                                    }
                                 }
+                                println!("");
+                            } else {
+                                panic!("ERROR: Couldn't list messages; Invalid backend response")
                             }
                         }
-                        println!("");
-                    } else {
-                        panic!("ERROR: Couldn't list messages; Invalid backend response")
-                    }
+                        print_messages(&mut serv_writer, &mut serv_reader, peer_id);
+    
+                        loop {
+
+                            let mut len_buf = [0; 4];
+                            serv_reader.read_exact(&mut len_buf).unwrap();
+                            let response_len = u32::from_be_bytes(len_buf) as usize;
+                            let mut response_buf = vec![0; response_len];
+                            serv_reader.read_exact(&mut response_buf).unwrap();
+                            let response = from_utf8(&response_buf).unwrap();
+                            if let Ok(refresh_request) = serde_json::from_str::<RefreshRequest>(response) {
+                                match refresh_request {
+                                    RefreshRequest::Connection => {
+                                        continue;
+                                    },
+                                    RefreshRequest::Message => {
+                                        print_messages(&mut serv_writer, &mut serv_reader, peer_id);
+                                    },
+                                    RefreshRequest::Kill => {
+                                        break;
+                                    }
+                                }
+                            } else {
+                                panic!("Refresher encountred unexpected message: {response:?}");
+                            }
+                        }
+                    }));
                     
 
                     print!("Message {}: ", peer_conn.peer_name);
@@ -203,6 +239,11 @@ fn main() {
                         peer_conn.peer_id, 
                         MessageContent::Text(input.to_string())
                     )).write_into(&mut serv_writer).unwrap();
+
+                    if let Some(msg_refresher) = msg_refr_handle {
+                        BackendToFrontendRequest::KillRefresher.write_into(&mut serv_writer).unwrap();
+                        msg_refresher.join().unwrap();
+                    }
                 } else {
                     panic!("ERROR: attempted to write message without a selected connection");
                 }
