@@ -224,8 +224,8 @@ fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Sett
             db_conn.insert_connection(Connection::new(peer_id, self_id, peer_name, peer_addr)).unwrap();
             PeerToPeerResponse::AcceptConnection(peer_id, setttings.self_name.to_owned(), local_addr).write_into(&mut peer_writer).unwrap();
             info!("Accepted peer connection from {}", peer_addr);
-            if let Some(conn) = fontend_conn {
-                let mut frontend_writer = BufWriter::new(conn);
+            if let Some(fontend_conn) = fontend_conn {
+                let mut frontend_writer = BufWriter::new(fontend_conn);
                 if peer_addr != local_addr {
                     RefreshRequest::Connection.write_into(&mut frontend_writer).unwrap();
                 }
@@ -239,6 +239,10 @@ fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Sett
                 db_conn.mark_as_recieved(msg.message_id).unwrap();
             } else {
                 db_conn.insert_message(msg).unwrap();
+                if let Some(fontend_conn) = fontend_conn {
+                    let mut frontend_writer = BufWriter::new(fontend_conn);
+                    RefreshRequest::Message.write_into(&mut frontend_writer).unwrap();
+                }
             }
         }
     }

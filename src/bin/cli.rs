@@ -221,24 +221,25 @@ fn main() {
                         }
                     }));
                     
-
-                    print!("Message {}: ", peer_conn.peer_name);
-                    stdout().flush().unwrap();
-                    stdout().execute(SavePosition).unwrap();
-                    println!("\nType Escape to exit.");
-                    stdout().execute(RestorePosition).unwrap();
-                    input = String::new();
-                    stdin().read_line(&mut input).unwrap();
-
-                    if input == "\u{1b}\n" {
-                        input_mode = InputMode::SelectConnection;
-                        continue;
+                    loop {
+                        print!("Message {}: ", peer_conn.peer_name);
+                        stdout().flush().unwrap();
+                        stdout().execute(SavePosition).unwrap();
+                        println!("\nType Escape to exit.");
+                        stdout().execute(RestorePosition).unwrap();
+                        input = String::new();
+                        stdin().read_line(&mut input).unwrap();
+    
+                        if input == "\u{1b}\n" {
+                            input_mode = InputMode::SelectConnection;
+                            break;
+                        }
+    
+                        BackendToFrontendRequest::MessagePeer((
+                            peer_conn.peer_id, 
+                            MessageContent::Text(input.to_string())
+                        )).write_into(&mut serv_writer).unwrap();
                     }
-
-                    BackendToFrontendRequest::MessagePeer((
-                        peer_conn.peer_id, 
-                        MessageContent::Text(input.to_string())
-                    )).write_into(&mut serv_writer).unwrap();
 
                     if let Some(msg_refresher) = msg_refr_handle {
                         BackendToFrontendRequest::KillRefresher.write_into(&mut serv_writer).unwrap();
