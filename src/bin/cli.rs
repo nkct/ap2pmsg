@@ -16,10 +16,25 @@ use std::{
         Arc, 
         Mutex
     }, 
-    str::from_utf8
+    str::from_utf8, process::exit
 };
 use ap2pmsg::*;
-use crossterm::{cursor::{SavePosition, RestorePosition}, ExecutableCommand};
+use crossterm::{
+    cursor::{
+        SavePosition, 
+        RestorePosition, 
+        MoveToRow, 
+        MoveTo, 
+        MoveToNextLine
+    }, 
+    ExecutableCommand, 
+    event::{
+        self, 
+        Event, 
+        KeyCode, KeyModifiers
+    }, 
+    terminal
+};
 use time::OffsetDateTime;
 
 enum InputMode {
@@ -179,16 +194,23 @@ fn main() {
                         fn print_messages(serv_writer: &mut BufWriter<TcpStream>, serv_reader: &mut BufReader<TcpStream>, peer_id: u32) {
                             BackendToFrontendRequest::ListMessages(peer_id, OffsetDateTime::UNIX_EPOCH, get_now()).write_into(serv_writer).unwrap();
 
-                            if let Ok(BackendToFrontendResponse::MessagesListed(messages)) = BackendToFrontendResponse::read_from(serv_reader) {
+                            if let Ok(BackendToFrontendResponse::MessagesListed(mut messages)) = BackendToFrontendResponse::read_from(serv_reader) {
+                                let window_size = terminal::window_size().unwrap();
+                                stdout().execute(SavePosition).unwrap();
+                                stdout().execute(MoveTo(0, 0)).unwrap();
+                                if messages.len() > window_size.rows as usize - 4 {
+                                    messages = messages.into_iter().rev().take(window_size.rows as usize - 4).rev().collect();
+                                }
                                 for message in messages {
                                     match message.content {
                                         MessageContent::Text(text) => {
                                             print!("{}: {}", message.peer_id, text);
                                             stdout().flush().unwrap();
+                                            stdout().execute(MoveToNextLine(1)).unwrap();
                                         }
                                     }
                                 }
-                                println!("");
+                                stdout().execute(RestorePosition).unwrap();
                             } else {
                                 panic!("ERROR: Couldn't list messages; Invalid backend response")
                             }
@@ -221,24 +243,76 @@ fn main() {
                         }
                     }));
                     
-                    loop {
+                    // unnessecary loop
+                    'message_loop: loop {
+                        let window_size = terminal::window_size().unwrap();
+                        stdout().execute(MoveToRow(window_size.rows - 2)).unwrap();
+
                         print!("Message {}: ", peer_conn.peer_name);
                         stdout().flush().unwrap();
-                        stdout().execute(SavePosition).unwrap();
-                        println!("\nType Escape to exit.");
-                        stdout().execute(RestorePosition).unwrap();
-                        input = String::new();
-                        stdin().read_line(&mut input).unwrap();
-    
-                        if input == "\u{1b}\n" {
-                            input_mode = InputMode::SelectConnection;
-                            break;
+                        println!("\nPress Escape to exit.");
+                        
+                        let mut input: Vec<char> = Vec::new();
+                        let mut cursor = input.len();
+                        let prompt_len = format!("Message {}: ", peer_conn.peer_name).len() as u16;
+                        let input_pos = (prompt_len, window_size.rows - 3);
+                        terminal::enable_raw_mode().unwrap();
+                        'read_loop: loop {
+                            stdout().execute(MoveTo(input_pos.0, input_pos.1)).unwrap();
+                            write!(stdout(), "{}", vec![" "; (window_size.columns - prompt_len) as usize].into_iter().collect::<String>()).unwrap();
+                            stdout().execute(MoveTo(input_pos.0, input_pos.1)).unwrap();
+                            write!(stdout(), "{}", input.clone().into_iter().collect::<String>()).unwrap();
+                            stdout().execute(MoveTo(input_pos.0 + cursor as u16, input_pos.1)).unwrap();
+                            
+                            if let Ok(Event::Key(key_event)) = event::read() {
+                                if key_event.code == KeyCode::Char('c') && key_event.modifiers == KeyModifiers::CONTROL {
+                                    exit(1)
+                                }
+                                match key_event.code {
+                                    KeyCode::Esc => {
+                                        terminal::disable_raw_mode().unwrap();
+                                        input_mode = InputMode::SelectConnection;
+                                        break 'message_loop;
+                                    }
+                                    KeyCode::Char(c) => {
+                                        input.insert(cursor, c);
+                                        cursor += 1
+                                    }
+                                    KeyCode::Left => {
+                                        if cursor > 0 {
+                                            cursor -= 1
+                                        }
+                                    }
+                                    KeyCode::Right => {
+                                        if cursor < input.len() {
+                                            cursor += 1
+                                        }
+                                    }
+                                    KeyCode::Backspace => {
+                                        if cursor != 0 {
+                                            input.swap_remove(cursor-1);
+                                            cursor -= 1;
+                                        }
+                                    }
+                                    KeyCode::Delete => {
+                                        if cursor != input.len() {
+                                            input.swap_remove(cursor);
+                                        }
+                                    }
+                                    KeyCode::Enter => {
+                                        terminal::disable_raw_mode().unwrap();
+                                        break 'read_loop;
+                                    }
+                                    _ => {}
+                                }
+                            }    
                         }
     
                         BackendToFrontendRequest::MessagePeer((
                             peer_conn.peer_id, 
-                            MessageContent::Text(input.to_string())
+                            MessageContent::Text(input.into_iter().collect())
                         )).write_into(&mut serv_writer).unwrap();
+                        break;
                     }
 
                     if let Some(msg_refresher) = msg_refr_handle {
