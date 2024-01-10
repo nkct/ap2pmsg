@@ -24,14 +24,13 @@ use crossterm::{
         SavePosition, 
         RestorePosition, 
         MoveToRow, 
-        MoveTo, 
-        MoveToNextLine
+        MoveTo
     }, 
     ExecutableCommand, 
     event::{
         self, 
         Event, 
-        KeyCode, KeyModifiers
+        KeyCode, KeyModifiers, KeyEventKind
     }, 
     terminal
 };
@@ -195,20 +194,20 @@ fn main() {
                             BackendToFrontendRequest::ListMessages(peer_id, OffsetDateTime::UNIX_EPOCH, get_now()).write_into(serv_writer).unwrap();
 
                             if let Ok(BackendToFrontendResponse::MessagesListed(mut messages)) = BackendToFrontendResponse::read_from(serv_reader) {
-                                let window_size = terminal::window_size().unwrap();
-                                stdout().execute(SavePosition).unwrap();
-                                stdout().execute(MoveTo(0, 0)).unwrap();
-                                if messages.len() > window_size.rows as usize - 4 {
-                                    messages = messages.into_iter().rev().take(window_size.rows as usize - 4).rev().collect();
+                                let window_size = terminal::size().unwrap();
+                                if messages.len() > window_size.1 as usize - 4 {
+                                    messages = messages.into_iter().rev().take(window_size.1 as usize - 4).rev().collect();
                                 }
+                                stdout().execute(SavePosition).unwrap();
+                                let mut i = 0;
                                 for message in messages {
                                     match message.content {
                                         MessageContent::Text(text) => {
-                                            print!("{}: {}", message.peer_id, text);
-                                            stdout().flush().unwrap();
-                                            stdout().execute(MoveToNextLine(1)).unwrap();
+                                            stdout().execute(MoveTo(0, i)).unwrap();
+                                            write!(stdout(), "{}: {}", message.peer_id, text).unwrap();
                                         }
                                     }
+                                    i += 1;
                                 }
                                 stdout().execute(RestorePosition).unwrap();
                             } else {
@@ -245,21 +244,20 @@ fn main() {
                     
                     // unnessecary loop
                     'message_loop: loop {
-                        let window_size = terminal::window_size().unwrap();
-                        stdout().execute(MoveToRow(window_size.rows - 2)).unwrap();
+                        let window_size = terminal::size().unwrap();
+                        stdout().execute(MoveToRow(window_size.1 - 3)).unwrap();
 
-                        print!("Message {}: ", peer_conn.peer_name);
-                        stdout().flush().unwrap();
-                        println!("\nPress Escape to exit.");
+                        write!(stdout(), "Message {}: ", peer_conn.peer_name).unwrap();
+                        write!(stdout(), "\nPress Escape to exit.").unwrap();
                         
                         let mut input: Vec<char> = Vec::new();
                         let mut cursor = input.len();
                         let prompt_len = format!("Message {}: ", peer_conn.peer_name).len() as u16;
-                        let input_pos = (prompt_len, window_size.rows - 3);
+                        let input_pos = (prompt_len, window_size.1 - 3);
                         terminal::enable_raw_mode().unwrap();
                         'read_loop: loop {
                             stdout().execute(MoveTo(input_pos.0, input_pos.1)).unwrap();
-                            write!(stdout(), "{}", vec![" "; (window_size.columns - prompt_len) as usize].into_iter().collect::<String>()).unwrap();
+                            write!(stdout(), "{}", vec![" "; (window_size.0 - prompt_len) as usize].into_iter().collect::<String>()).unwrap();
                             stdout().execute(MoveTo(input_pos.0, input_pos.1)).unwrap();
                             write!(stdout(), "{}", input.clone().into_iter().collect::<String>()).unwrap();
                             stdout().execute(MoveTo(input_pos.0 + cursor as u16, input_pos.1)).unwrap();
@@ -267,6 +265,9 @@ fn main() {
                             if let Ok(Event::Key(key_event)) = event::read() {
                                 if key_event.code == KeyCode::Char('c') && key_event.modifiers == KeyModifiers::CONTROL {
                                     exit(1)
+                                }
+                                if key_event.kind == KeyEventKind::Release {
+                                    continue;
                                 }
                                 match key_event.code {
                                     KeyCode::Esc => {
