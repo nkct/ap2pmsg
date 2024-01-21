@@ -235,6 +235,7 @@ fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Sett
             PeerToPeerResponse::Recieved(msg.message_id).write_into(&mut peer_writer).unwrap();
             info!("Confirmed recieving message {} from {}", msg.message_id, peer_addr);
             // handle edge case where a host is sending a message to itself
+            // todo: handle messages from unregistered peer
             if (db_conn.get_peer_addr(msg.self_id).unwrap() == local_addr) && (db_conn.get_message(msg.message_id).unwrap().is_some()) {
                 db_conn.mark_as_recieved(msg.message_id).unwrap();
             } else {
@@ -270,9 +271,12 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
                         debug!("Killed refresher");
                     },
                     BackendToFrontendRequest::MessagePeer((peer_id, content)) => {
+                        let msg = db_conn.new_message(peer_id, content).unwrap();
+                        RefreshRequest::Message.write_into(&mut frontend_writer).unwrap();
+                        
                         let peer_addr = &db_conn.get_peer_addr(peer_id).unwrap();
                         let peer_conn_result = TcpStream::connect_timeout(peer_addr, setttings.peer_timeout);
-                        if let Err(e) = peer_conn_result {
+                        if let Err(ref e) = peer_conn_result {
                             warn!("Could not connect to peer, {}", e);
                             continue;
                         }
@@ -281,12 +285,10 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
                         let mut peer_writer = BufWriter::new(peer_conn.try_clone().unwrap());
                         let mut peer_reader = BufReader::new(peer_conn);
 
-                        let msg = db_conn.new_message(peer_id, content).unwrap();
                         let msg_id = msg.message_id;
                         InitialRequest::Peer(PeerToPeerRequest::Message(msg)).write_into(&mut peer_writer).unwrap();
                         info!("Sent message {} to peer at {}", msg_id, peer_addr);
 
-                        // refresh frontend after success
                         if let Ok(PeerToPeerResponse::Recieved(msg_id)) = PeerToPeerResponse::read_from(&mut peer_reader) {
                             db_conn.mark_as_recieved(msg_id).unwrap();
                         } else {
@@ -330,6 +332,38 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
                     },
                     BackendToFrontendRequest::LinkingRequest => {
                         error!("Attempted to link an already linked frontend")
+                    },
+                    BackendToFrontendRequest::RetryUnrecieved(peer_id) => {
+                        let peer_addr = &db_conn.get_peer_addr(peer_id).unwrap();
+                        let mut peer_conn_result = TcpStream::connect_timeout(peer_addr, setttings.peer_timeout);
+                        if let Err(ref e) = peer_conn_result {
+                            warn!("Could not connect to peer, {}", e);
+                            continue;
+                        }
+
+                        
+                        let unrecieved = db_conn.get_unrecieved_for(peer_id).unwrap();
+                        for msg in unrecieved {
+                            let peer_conn = peer_conn_result.unwrap();
+                            let mut peer_writer = BufWriter::new(peer_conn.try_clone().unwrap());
+                            let mut peer_reader = BufReader::new(peer_conn);
+                            
+                            let msg_id = msg.message_id;
+                            InitialRequest::Peer(PeerToPeerRequest::Message(msg)).write_into(&mut peer_writer).unwrap();
+                            info!("Sent message {} to peer at {}", msg_id, peer_addr);
+
+                            if let Ok(PeerToPeerResponse::Recieved(msg_id)) = PeerToPeerResponse::read_from(&mut peer_reader) {
+                                db_conn.mark_as_recieved(msg_id).unwrap();
+                            } else {
+                                error!("Invalid peer response from {}", peer_addr);
+                            }
+
+                            peer_conn_result = TcpStream::connect_timeout(peer_addr, setttings.peer_timeout);
+                            if let Err(ref e) = peer_conn_result {
+                                warn!("Could not connect to peer, {}", e);
+                                break;
+                            }
+                        }
                     }
                 }
             },

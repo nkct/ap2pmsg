@@ -201,10 +201,14 @@ fn main() {
                                 stdout().execute(SavePosition).unwrap();
                                 let mut i = 0;
                                 for message in messages {
+                                    let mut unsent = "";
+                                    if message.time_recieved.is_none() {
+                                        unsent = "*";
+                                    }
                                     match message.content {
                                         MessageContent::Text(text) => {
                                             stdout().execute(MoveTo(0, i)).unwrap();
-                                            write!(stdout(), "{}: {}", message.peer_id, text).unwrap();
+                                            write!(stdout(), "{}:{} {}", message.peer_id, unsent, text).unwrap();
                                         }
                                     }
                                     i += 1;
@@ -242,7 +246,7 @@ fn main() {
                         }
                     }));
                     
-                    // unnessecary loop
+                    BackendToFrontendRequest::RetryUnrecieved(peer_id).write_into(&mut serv_writer).unwrap();
                     'message_loop: loop {
                         let window_size = terminal::size().unwrap();
                         stdout().execute(MoveToRow(window_size.1 - 3)).unwrap();
@@ -306,14 +310,13 @@ fn main() {
                                     }
                                     _ => {}
                                 }
-                            }    
+                            }
                         }
     
                         BackendToFrontendRequest::MessagePeer((
                             peer_conn.peer_id, 
                             MessageContent::Text(input.into_iter().collect())
                         )).write_into(&mut serv_writer).unwrap();
-                        break;
                     }
 
                     if let Some(msg_refresher) = msg_refr_handle {

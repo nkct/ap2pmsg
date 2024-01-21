@@ -71,6 +71,7 @@ pub enum BackendToFrontendRequest {
     ListMessages(u32, OffsetDateTime, OffsetDateTime),
     ListPeerConnections,
     MessagePeer((u32, MessageContent)),
+    RetryUnrecieved(u32),
     KillRefresher
 }
 impl Writable for BackendToFrontendRequest {}
@@ -90,6 +91,7 @@ impl Readable for BackendToFrontendResponse {}
 pub enum PeerToPeerRequest {
     ProposeConnection(u32, String, SocketAddr),
     Message(Message),
+    // bulk messages
 }
 impl Writable for PeerToPeerRequest {}
 impl Readable for PeerToPeerRequest {}
@@ -503,6 +505,55 @@ impl DbConn {
                 }
             };
 
+            msgs.push(Message {
+                message_id: values.0,
+                peer_id: values.1,
+                self_id: values.2,
+                time_sent: OffsetDateTime::parse(&values.3, datetime_format).unwrap(),
+                time_recieved: values.4.map(|time_recieved| {
+                    OffsetDateTime::parse(&time_recieved, datetime_format).unwrap()
+                }),
+                content,
+            })
+        }
+
+        return Ok(msgs);
+    }
+
+    pub fn get_unrecieved_for(&self, peer_id: u32) -> Result<Vec<Message>, DbErr> {
+        let mut stmt = self.0.prepare("
+            SELECT message_id, peer_id, self_id, time_sent, time_recieved, content_type, content FROM Messages
+            NATURAL JOIN Connections
+            WHERE peer_id = ?1 AND time_recieved IS NULL
+        ;")?;
+        let rows = stmt.query_map((
+            peer_id,
+        ), |row| {
+            Ok((
+                row.get::<usize, u32>(0)?,
+                row.get::<usize, u32>(1)?,
+                row.get::<usize, u32>(2)?,
+                row.get::<usize, String>(3)?,
+                row.get::<usize, Option<String>>(4)?,
+                row.get::<usize, String>(5)?,
+                row.get::<usize, Vec<u8>>(6)?,
+            ))
+        })?;
+
+        let mut msgs = Vec::new();
+        for values in rows {
+            let values = values?;
+
+            let content = match values.5.as_str() {
+                "TEXT" => {
+                    MessageContent::Text(String::from_utf8(values.6)?)
+                }
+                _ => {
+                    return Err(DbErr::InvalidMessageContentType)?;
+                }
+            };
+
+            let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
             msgs.push(Message {
                 message_id: values.0,
                 peer_id: values.1,
