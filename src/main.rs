@@ -202,6 +202,7 @@ fn listen(listener: TcpListener, setttings: Setttings) {
                 }
             }
         } else {
+            // todo: log the incorrect request
             warn!("Incorrect request");
             continue;
         }
@@ -238,13 +239,14 @@ fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Sett
 
         }
         PeerToPeerRequest::BulkMessage(msgs) => {
-            let msg_ids = msgs.iter().map(|msg| msg.message_id);
-            PeerToPeerResponse::BulkRecieved(msg_ids.clone().collect()).write_into(&mut peer_writer).unwrap();
+            let msg_ids: Vec<u32> = msgs.iter().map(|msg| msg.message_id).collect();
+            PeerToPeerResponse::BulkRecieved(msg_ids.clone()).write_into(&mut peer_writer).unwrap();
             if msgs.is_empty() {
                 warn!("Recieved BulkMessage request containing zero messages");
                 return;
             }
-            let first = msg_ids.clone().next().unwrap();
+            let mut msg_ids = msg_ids.into_iter();
+            let first = msg_ids.next().unwrap();
             info!("Confirmed recieving messages {} from {}", msg_ids.fold(first.to_string(), |acc, id| format!("{acc}, {id}")), peer_addr);
             for msg in msgs {
                 recieve_message(msg, &db_conn, local_addr, frontend_conn.as_ref())
@@ -268,10 +270,18 @@ fn recieve_message(msg: Message, db_conn: &DbConn, local_addr: SocketAddr, front
 }
 
 fn retry_unrecieved(peer_id: u32, db_conn: &DbConn, setttings: Setttings) {
+    if !db_conn.peer_online(peer_id).unwrap() {
+        return;
+    }
+    let unrecieved = db_conn.get_unrecieved_for(peer_id).unwrap();
+    if unrecieved.is_empty() {
+        return;
+    }
     let peer_addr = &db_conn.get_peer_addr(peer_id).unwrap();
     let peer_conn_result = TcpStream::connect_timeout(peer_addr, setttings.peer_timeout);
     if let Err(ref e) = peer_conn_result {
         warn!("Could not connect to peer, {}", e);
+        db_conn.set_peer_online(peer_id, false).unwrap();
         return;
     }
 
@@ -279,12 +289,9 @@ fn retry_unrecieved(peer_id: u32, db_conn: &DbConn, setttings: Setttings) {
     let mut peer_writer = BufWriter::new(peer_conn.try_clone().unwrap());
     let mut peer_reader = BufReader::new(peer_conn);
                         
-    let unrecieved = db_conn.get_unrecieved_for(peer_id).unwrap();
-    if unrecieved.is_empty() {
-        return;
-    }
-    let first_id = unrecieved[0].message_id;
-    let msg_ids = unrecieved.iter().map(|msg| msg.message_id).fold(first_id.to_string(), |acc, id| format!("{acc}, {id}"));
+    let mut msg_ids = unrecieved.iter().map(|msg| msg.message_id);
+    let first_id = msg_ids.next().unwrap();
+    let msg_ids = msg_ids.fold(first_id.to_string(), |acc, id| format!("{acc}, {id}"));
     InitialRequest::Peer(PeerToPeerRequest::BulkMessage(unrecieved)).write_into(&mut peer_writer).unwrap();
     info!("Sent messages {} to peer at {}", msg_ids, peer_addr);
     
@@ -324,8 +331,10 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
                         let peer_conn_result = TcpStream::connect_timeout(peer_addr, setttings.peer_timeout);
                         if let Err(ref e) = peer_conn_result {
                             warn!("Could not connect to peer, {}", e);
+                            db_conn.set_peer_online(peer_id, false).unwrap();
                             continue;
                         }
+                        db_conn.set_peer_online(peer_id, true).unwrap();
 
                         let peer_conn = peer_conn_result.unwrap();
                         let mut peer_writer = BufWriter::new(peer_conn.try_clone().unwrap());

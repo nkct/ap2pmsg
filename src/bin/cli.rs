@@ -206,6 +206,9 @@ fn main() {
                                     if message.time_recieved.is_none() {
                                         unsent = "*";
                                     }
+                                    // clear line
+                                    stdout().execute(MoveTo(0, i)).unwrap();
+                                    write!(stdout(), "{}", vec![" "; (window_size.0) as usize].into_iter().collect::<String>()).unwrap();
                                     match message.content {
                                         MessageContent::Text(text) => {
                                             stdout().execute(MoveTo(0, i)).unwrap();

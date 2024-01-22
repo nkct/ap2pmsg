@@ -302,6 +302,25 @@ impl DbConn {
         return Ok(name);
     }
 
+    pub fn peer_online(&self, peer_id: u32) -> Result<bool, DbErr>{
+        let mut stmt = self.0.prepare("
+            SELECT online FROM Connections 
+            WHERE peer_id == ?1
+        ;")?;
+        let status = stmt.query_row([peer_id], |row| {
+            Ok(row.get::<usize, usize>(0)?)
+        })?;
+        return Ok(status == 1);
+    }
+
+    pub fn set_peer_online(&self, peer_id: u32, online: bool) -> Result<usize, DbErr> {
+        let mut stmt = self.0.prepare("
+            UPDATE Connections SET online = ?1
+            WHERE peer_id == ?2
+        ;")?;
+        Ok(stmt.execute((online, peer_id))?)
+    }
+
     pub fn mark_as_recieved(&self, msg_id: u32) -> Result<usize, DbErr> {
         let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
         let mut stmt = self.0.prepare("
@@ -313,20 +332,23 @@ impl DbConn {
 
     pub fn bulk_mark_as_recieved(&self, msg_ids: Vec<u32>) -> Result<usize, DbErr> {
         let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
-        let mut stmt = self.0.prepare("
+        let placeholders: String = std::iter::repeat("?").take(msg_ids.len()).collect::<Vec<_>>().join(", ");
+        let mut stmt = self.0.prepare(&format!("
             UPDATE Messages SET time_recieved = ?1
-            WHERE message_id IN ?2
-        ;")?;
+            WHERE message_id IN ({})
+        ;", placeholders))?;
         if msg_ids.is_empty() {
             return Ok(0);
         }
-        let first_id = msg_ids[0];
-        let mut ids = msg_ids.iter().fold(format!("({first_id}").to_owned(), |acc, id| format!("{acc}, {id}"));
-        ids.push(')');
-        Ok(stmt.execute((
-            get_now().format(datetime_format).unwrap(), 
-            ids
-        ))?)
+        let parameters = Some(get_now()
+            .format(datetime_format)
+            .unwrap())
+            .into_iter()
+            .chain(msg_ids
+                .into_iter()
+                .map(|id| id.to_string())
+            );
+        Ok(stmt.execute(rusqlite::params_from_iter(parameters))?)
     }
 
     pub fn get_connection(&self, connection_id: u32) -> Result<Connection, DbErr> {
