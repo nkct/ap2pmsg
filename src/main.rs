@@ -240,7 +240,8 @@ fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Sett
         PeerToPeerRequest::BulkMessage(msgs) => {
             let msg_ids = msgs.iter().map(|msg| msg.message_id);
             PeerToPeerResponse::BulkRecieved(msg_ids.clone().collect()).write_into(&mut peer_writer).unwrap();
-            info!("Confirmed recieving messages {} from {}", msg_ids.fold("".to_owned(), |acc, id| format!("{acc}, {id}")), peer_addr);
+            let first = msg_ids.clone().next().unwrap();
+            info!("Confirmed recieving messages {} from {}", msg_ids.fold(first.to_string(), |acc, id| format!("{acc}, {id}")), peer_addr);
             for msg in msgs {
                 recieve_message(msg, &db_conn, local_addr, frontend_conn.as_ref())
             }
@@ -275,7 +276,8 @@ fn retry_unrecieved(peer_id: u32, db_conn: &DbConn, setttings: Setttings) {
     let mut peer_reader = BufReader::new(peer_conn);
                         
     let unrecieved = db_conn.get_unrecieved_for(peer_id).unwrap();
-    let msg_ids = unrecieved.iter().map(|msg| msg.message_id).fold("".to_owned(), |acc, id| format!("{acc}, {id}"));
+    let first_id = unrecieved[0].message_id;
+    let msg_ids = unrecieved.iter().map(|msg| msg.message_id).fold(first_id.to_string(), |acc, id| format!("{acc}, {id}"));
     InitialRequest::Peer(PeerToPeerRequest::BulkMessage(unrecieved)).write_into(&mut peer_writer).unwrap();
     info!("Sent messages {} to peer at {}", msg_ids, peer_addr);
     
