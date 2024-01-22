@@ -262,6 +262,30 @@ fn recieve_message(msg: Message, db_conn: &DbConn, local_addr: SocketAddr, front
     }
 }
 
+fn retry_unrecieved(peer_id: u32, db_conn: &DbConn, setttings: Setttings) {
+    let peer_addr = &db_conn.get_peer_addr(peer_id).unwrap();
+    let peer_conn_result = TcpStream::connect_timeout(peer_addr, setttings.peer_timeout);
+    if let Err(ref e) = peer_conn_result {
+        warn!("Could not connect to peer, {}", e);
+        return;
+    }
+
+    let peer_conn = peer_conn_result.unwrap();
+    let mut peer_writer = BufWriter::new(peer_conn.try_clone().unwrap());
+    let mut peer_reader = BufReader::new(peer_conn);
+                        
+    let unrecieved = db_conn.get_unrecieved_for(peer_id).unwrap();
+    let msg_ids = unrecieved.iter().map(|msg| msg.message_id).fold("".to_owned(), |acc, id| format!("{acc}, {id}"));
+    InitialRequest::Peer(PeerToPeerRequest::BulkMessage(unrecieved)).write_into(&mut peer_writer).unwrap();
+    info!("Sent messages {} to peer at {}", msg_ids, peer_addr);
+    
+    if let Ok(PeerToPeerResponse::BulkRecieved(msg_ids)) = PeerToPeerResponse::read_from(&mut peer_reader) {
+        db_conn.bulk_mark_as_recieved(msg_ids).unwrap();
+    } else {
+        error!("Invalid peer response from {}", peer_addr);
+    }
+}
+
 fn handle_frontend(conn: TcpStream, setttings: Setttings) {
     let frontend_addr = conn.peer_addr().unwrap();
     debug!("Handling frontend at {}", frontend_addr);
@@ -347,36 +371,7 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
                         error!("Attempted to link an already linked frontend")
                     },
                     BackendToFrontendRequest::RetryUnrecieved(peer_id) => {
-                        let peer_addr = &db_conn.get_peer_addr(peer_id).unwrap();
-                        let mut peer_conn_result = TcpStream::connect_timeout(peer_addr, setttings.peer_timeout);
-                        if let Err(ref e) = peer_conn_result {
-                            warn!("Could not connect to peer, {}", e);
-                            continue;
-                        }
-
-                        
-                        let unrecieved = db_conn.get_unrecieved_for(peer_id).unwrap();
-                        for msg in unrecieved {
-                            let peer_conn = peer_conn_result.unwrap();
-                            let mut peer_writer = BufWriter::new(peer_conn.try_clone().unwrap());
-                            let mut peer_reader = BufReader::new(peer_conn);
-                            
-                            let msg_id = msg.message_id;
-                            InitialRequest::Peer(PeerToPeerRequest::Message(msg)).write_into(&mut peer_writer).unwrap();
-                            info!("Sent message {} to peer at {}", msg_id, peer_addr);
-
-                            if let Ok(PeerToPeerResponse::Recieved(msg_id)) = PeerToPeerResponse::read_from(&mut peer_reader) {
-                                db_conn.mark_as_recieved(msg_id).unwrap();
-                            } else {
-                                error!("Invalid peer response from {}", peer_addr);
-                            }
-
-                            peer_conn_result = TcpStream::connect_timeout(peer_addr, setttings.peer_timeout);
-                            if let Err(ref e) = peer_conn_result {
-                                warn!("Could not connect to peer, {}", e);
-                                break;
-                            }
-                        }
+                        retry_unrecieved(peer_id, &db_conn, setttings);
                     }
                 }
             },

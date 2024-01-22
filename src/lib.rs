@@ -311,6 +311,20 @@ impl DbConn {
         Ok(stmt.execute((get_now().format(datetime_format).unwrap(), msg_id))?)
     }
 
+    pub fn bulk_mark_as_recieved(&self, msg_ids: Vec<u32>) -> Result<usize, DbErr> {
+        let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
+        let mut stmt = self.0.prepare("
+            UPDATE Messages SET time_recieved = ?1
+            WHERE message_id IN ?2
+        ;")?;
+        let mut ids = msg_ids.iter().fold("(".to_owned(), |acc, id| format!("{acc}, {id}"));
+        ids.push(')');
+        Ok(stmt.execute((
+            get_now().format(datetime_format).unwrap(), 
+            ids
+        ))?)
+    }
+
     pub fn get_connection(&self, connection_id: u32) -> Result<Connection, DbErr> {
         let mut stmt = self.0.prepare("
             SELECT peer_id, self_id, peer_name, peer_addr, online, time_established FROM Connections 

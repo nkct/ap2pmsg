@@ -191,6 +191,7 @@ fn main() {
                         let mut serv_reader = BufReader::new(serv_conn_clone);
 
                         fn print_messages(serv_writer: &mut BufWriter<TcpStream>, serv_reader: &mut BufReader<TcpStream>, peer_id: u32) {
+                            BackendToFrontendRequest::RetryUnrecieved(peer_id).write_into(serv_writer).unwrap();
                             BackendToFrontendRequest::ListMessages(peer_id, OffsetDateTime::UNIX_EPOCH, get_now()).write_into(serv_writer).unwrap();
 
                             if let Ok(BackendToFrontendResponse::MessagesListed(mut messages)) = BackendToFrontendResponse::read_from(serv_reader) {
@@ -246,7 +247,6 @@ fn main() {
                         }
                     }));
                     
-                    BackendToFrontendRequest::RetryUnrecieved(peer_id).write_into(&mut serv_writer).unwrap();
                     'message_loop: loop {
                         let window_size = terminal::size().unwrap();
                         stdout().execute(MoveToRow(window_size.1 - 3)).unwrap();
