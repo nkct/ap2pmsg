@@ -208,7 +208,7 @@ fn listen(listener: TcpListener, setttings: Setttings) {
     }
 }
 
-fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Setttings, fontend_conn: Option<TcpStream>) {
+fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Setttings, frontend_conn: Option<TcpStream>) {
     let peer_addr = conn.peer_addr().unwrap();
     debug!("Handling peer at {}", peer_addr);
     let mut peer_writer = BufWriter::new(conn.try_clone().unwrap());
@@ -224,8 +224,8 @@ fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Sett
             db_conn.insert_connection(Connection::new(peer_id, self_id, peer_name, peer_addr)).unwrap();
             PeerToPeerResponse::AcceptConnection(peer_id, setttings.self_name.to_owned(), local_addr).write_into(&mut peer_writer).unwrap();
             info!("Accepted peer connection from {}", peer_addr);
-            if let Some(fontend_conn) = fontend_conn {
-                let mut frontend_writer = BufWriter::new(fontend_conn);
+            if let Some(frontend_conn) = frontend_conn {
+                let mut frontend_writer = BufWriter::new(frontend_conn);
                 if peer_addr != local_addr {
                     RefreshRequest::Connection.write_into(&mut frontend_writer).unwrap();
                 }
@@ -234,17 +234,30 @@ fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Sett
         PeerToPeerRequest::Message(msg) => {
             PeerToPeerResponse::Recieved(msg.message_id).write_into(&mut peer_writer).unwrap();
             info!("Confirmed recieving message {} from {}", msg.message_id, peer_addr);
-            // handle edge case where a host is sending a message to itself
-            // todo: handle messages from unregistered peer
-            if (db_conn.get_peer_addr(msg.self_id).unwrap() == local_addr) && (db_conn.get_message(msg.message_id).unwrap().is_some()) {
-                db_conn.mark_as_recieved(msg.message_id).unwrap();
-            } else {
-                db_conn.insert_message(msg).unwrap();
-                if let Some(fontend_conn) = fontend_conn {
-                    let mut frontend_writer = BufWriter::new(fontend_conn);
-                    RefreshRequest::Message.write_into(&mut frontend_writer).unwrap();
-                }
+            recieve_message(msg, &db_conn, local_addr, frontend_conn.as_ref())
+
+        }
+        PeerToPeerRequest::BulkMessage(msgs) => {
+            let msg_ids = msgs.iter().map(|msg| msg.message_id);
+            PeerToPeerResponse::BulkRecieved(msg_ids.clone().collect()).write_into(&mut peer_writer).unwrap();
+            info!("Confirmed recieving messages {} from {}", msg_ids.fold("".to_owned(), |acc, id| format!("{acc}, {id}")), peer_addr);
+            for msg in msgs {
+                recieve_message(msg, &db_conn, local_addr, frontend_conn.as_ref())
             }
+        }
+    }
+}
+
+fn recieve_message(msg: Message, db_conn: &DbConn, local_addr: SocketAddr, frontend_conn: Option<&TcpStream>) {
+    // todo: handle messages from unregistered peer
+    // handle edge case where a host is sending a message to itself
+    if (db_conn.get_peer_addr(msg.self_id).unwrap() == local_addr) && (db_conn.get_message(msg.message_id).unwrap().is_some()) {
+        db_conn.mark_as_recieved(msg.message_id).unwrap();
+    } else {
+        db_conn.insert_message(msg).unwrap();
+        if let Some(frontend_conn) = frontend_conn {
+            let mut frontend_writer = BufWriter::new(frontend_conn.try_clone().unwrap());
+            RefreshRequest::Message.write_into(&mut frontend_writer).unwrap();
         }
     }
 }

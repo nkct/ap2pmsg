@@ -91,7 +91,7 @@ impl Readable for BackendToFrontendResponse {}
 pub enum PeerToPeerRequest {
     ProposeConnection(u32, String, SocketAddr),
     Message(Message),
-    // bulk messages
+    BulkMessage(Vec<Message>),
 }
 impl Writable for PeerToPeerRequest {}
 impl Readable for PeerToPeerRequest {}
@@ -100,6 +100,7 @@ impl Readable for PeerToPeerRequest {}
 pub enum PeerToPeerResponse {
     AcceptConnection(u32, String, SocketAddr),
     Recieved(u32),
+    BulkRecieved(Vec<u32>),
 }
 impl Writable for PeerToPeerResponse {}
 impl Readable for PeerToPeerResponse {}
