@@ -240,6 +240,10 @@ fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Sett
         PeerToPeerRequest::BulkMessage(msgs) => {
             let msg_ids = msgs.iter().map(|msg| msg.message_id);
             PeerToPeerResponse::BulkRecieved(msg_ids.clone().collect()).write_into(&mut peer_writer).unwrap();
+            if msgs.is_empty() {
+                warn!("Recieved BulkMessage request containing zero messages");
+                return;
+            }
             let first = msg_ids.clone().next().unwrap();
             info!("Confirmed recieving messages {} from {}", msg_ids.fold(first.to_string(), |acc, id| format!("{acc}, {id}")), peer_addr);
             for msg in msgs {
@@ -276,6 +280,9 @@ fn retry_unrecieved(peer_id: u32, db_conn: &DbConn, setttings: Setttings) {
     let mut peer_reader = BufReader::new(peer_conn);
                         
     let unrecieved = db_conn.get_unrecieved_for(peer_id).unwrap();
+    if unrecieved.is_empty() {
+        return;
+    }
     let first_id = unrecieved[0].message_id;
     let msg_ids = unrecieved.iter().map(|msg| msg.message_id).fold(first_id.to_string(), |acc, id| format!("{acc}, {id}"));
     InitialRequest::Peer(PeerToPeerRequest::BulkMessage(unrecieved)).write_into(&mut peer_writer).unwrap();

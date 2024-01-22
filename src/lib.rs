@@ -317,6 +317,9 @@ impl DbConn {
             UPDATE Messages SET time_recieved = ?1
             WHERE message_id IN ?2
         ;")?;
+        if msg_ids.is_empty() {
+            return Ok(0);
+        }
         let first_id = msg_ids[0];
         let mut ids = msg_ids.iter().fold(format!("({first_id}").to_owned(), |acc, id| format!("{acc}, {id}"));
         ids.push(')');
