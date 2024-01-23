@@ -72,6 +72,7 @@ pub enum BackendToFrontendRequest {
     ListPeerConnections,
     MessagePeer((u32, MessageContent)),
     RetryUnrecieved(u32),
+    PingPeer(u32),
     KillRefresher
 }
 impl Writable for BackendToFrontendRequest {}

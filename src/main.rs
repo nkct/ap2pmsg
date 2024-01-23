@@ -390,6 +390,16 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
                     },
                     BackendToFrontendRequest::RetryUnrecieved(peer_id) => {
                         retry_unrecieved(peer_id, &db_conn, setttings);
+                    },
+                    BackendToFrontendRequest::PingPeer(peer_id) => {
+                        let peer_addr = &db_conn.get_peer_addr(peer_id).unwrap();
+                        let peer_conn_result = TcpStream::connect_timeout(peer_addr, setttings.peer_timeout);
+                        if let Err(ref e) = peer_conn_result {
+                            warn!("Could not connect to peer, {}", e);
+                            db_conn.set_peer_online(peer_id, false).unwrap();
+                            continue;
+                        }
+                        db_conn.set_peer_online(peer_id, true).unwrap();
                     }
                 }
             },

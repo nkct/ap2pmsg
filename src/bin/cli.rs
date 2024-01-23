@@ -222,6 +222,7 @@ fn main() {
                                 panic!("ERROR: Couldn't list messages; Invalid backend response")
                             }
                         }
+                        BackendToFrontendRequest::PingPeer(peer_id).write_into(&mut serv_writer).unwrap();
                         print_messages(&mut serv_writer, &mut serv_reader, peer_id);
     
                         loop {
