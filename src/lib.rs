@@ -109,6 +109,7 @@ impl Readable for PeerToPeerResponse {}
 #[derive(Serialize, Deserialize, Debug)]
 pub enum MessageContent {
     Text(String),
+    File((String, Vec<u8>)),
 }
 
 // sender_id is unique to each connection
@@ -193,7 +194,8 @@ pub enum DbErr {
     UtfError(string::FromUtf8Error),
     InvalidMessageContentType,
     NoAvailableId,
-    UnableToSaveSequenceConfig(io::Error)
+    UnableToSaveSequenceConfig(io::Error),
+    FilenameTooLong,
 }
 impl Display for DbErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -410,15 +412,25 @@ impl DbConn {
         return Ok(conns);
     }
 
-    pub fn new_message(&self, peer_id: u32, content: MessageContent) -> Result<Message, Box<dyn std::error::Error>> {
-        let content_type: &str;
-        let blob: Vec<u8>;
+    fn serialize_message_content(content: MessageContent) -> Result<(String, Vec<u8>), DbErr> {
         match content {
             MessageContent::Text(content) => {
-                content_type = "TEXT";
-                blob = content.into();
+                return Ok(("TEXT".to_owned(), content.into()));
             }
+            MessageContent::File((filename, content)) => {
+                if filename.len() > u8::MAX as usize {
+                    return Err(DbErr::FilenameTooLong);
+                }
+                let mut blob = vec![filename.len() as u8];
+                blob.extend_from_slice(filename.as_bytes());
+                blob.extend_from_slice(&content);
+                return Ok(("FILE".to_owned(), blob));
+            },
         }
+    }
+
+    pub fn new_message(&self, peer_id: u32, content: MessageContent) -> Result<Message, Box<dyn std::error::Error>> {
+        let (content_type, blob) = DbConn::serialize_message_content(content)?;
         
         let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
         self.0.execute("
@@ -431,14 +443,8 @@ impl DbConn {
     }
 
     pub fn insert_message(&self, msg: Message) -> Result<u32, Box<dyn std::error::Error>> {
-        let content_type: &str;
-        let blob: Vec<u8>;
-        match msg.content {
-            MessageContent::Text(content) => {
-                content_type = "TEXT";
-                blob = content.into();
-            }
-        }
+        let (content_type, blob) = DbConn::serialize_message_content(msg.content)?;
+
         let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
         self.0.execute("
         INSERT INTO Messages (message_id, connection_id, time_sent, time_recieved, content_type, content) VALUES 
@@ -449,20 +455,31 @@ impl DbConn {
     }
 
     pub fn update_message_content(&self, msg_id: u32, content: MessageContent) -> Result<u32, Box<dyn std::error::Error>> {
-        let content_type: &str;
-        let blob: Vec<u8>;
-        match content {
-            MessageContent::Text(content) => {
-                content_type = "TEXT";
-                blob = content.into();
-            }
-        }
+        let (content_type, blob) = DbConn::serialize_message_content(content)?;
+
         self.0.execute("
         UPDATE Messages  SET content_type = ?1, content = ?2;
         WHERE message_id == ?3",
         (content_type, blob, msg_id))?;
         
         Ok(self.0.last_insert_rowid() as u32)
+    }
+
+    fn deserialize_message_content(content_type: &str, blob: Vec<u8>) -> Result<MessageContent, DbErr> {
+        match content_type {
+            "TEXT" => {
+                return Ok(MessageContent::Text(String::from_utf8(blob)?));
+            }
+            "FILE" => {
+                let filename_len = blob[0] as usize;
+                let filename = String::from_utf8((&blob[1..=filename_len]).to_vec())?;
+                let file_content = (&blob[filename_len+1..]).to_vec();
+                return Ok(MessageContent::File((filename, file_content)));
+            }
+            _ => {
+                return Err(DbErr::InvalidMessageContentType)?;
+            }
+        };
     }
 
     pub fn get_message(&self, message_id: u32) -> Result<Option<Message>, DbErr> {
@@ -490,14 +507,7 @@ impl DbConn {
 
         let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
 
-        let content = match values.5.as_str() {
-            "TEXT" => {
-                MessageContent::Text(String::from_utf8(values.6)?)
-            }
-            _ => {
-                return Err(DbErr::InvalidMessageContentType)?;
-            }
-        };
+        let content = DbConn::deserialize_message_content(values.5.as_str(), values.6)?;
 
         Ok(Some(Message {
             message_id: values.0,
@@ -538,15 +548,8 @@ impl DbConn {
         for values in rows {
             let values = values?;
 
-            let content = match values.5.as_str() {
-                "TEXT" => {
-                    MessageContent::Text(String::from_utf8(values.6)?)
-                }
-                _ => {
-                    return Err(DbErr::InvalidMessageContentType)?;
-                }
-            };
-
+            let content = DbConn::deserialize_message_content(values.5.as_str(), values.6)?;
+            
             msgs.push(Message {
                 message_id: values.0,
                 peer_id: values.1,
@@ -586,14 +589,7 @@ impl DbConn {
         for values in rows {
             let values = values?;
 
-            let content = match values.5.as_str() {
-                "TEXT" => {
-                    MessageContent::Text(String::from_utf8(values.6)?)
-                }
-                _ => {
-                    return Err(DbErr::InvalidMessageContentType)?;
-                }
-            };
+            let content = DbConn::deserialize_message_content(values.5.as_str(), values.6)?;
 
             let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
             msgs.push(Message {

@@ -1,22 +1,17 @@
 use std::{
-    io::{
+    env, fs, io::{
         stdin, 
         stdout,
         BufWriter, 
         prelude::*, 
         BufReader
-    }, 
-    net::{
+    }, net::{
         TcpStream, 
         SocketAddr
-    }, 
-    env, 
-    thread, 
-    sync::{
+    }, path::{Path, PathBuf}, process::exit, str::from_utf8, sync::{
         Arc, 
         Mutex
-    }, 
-    str::from_utf8, process::exit
+    }, thread
 };
 use ap2pmsg::*;
 use crossterm::{
@@ -212,8 +207,13 @@ fn main() {
                                     match message.content {
                                         MessageContent::Text(text) => {
                                             stdout().execute(MoveTo(0, i)).unwrap();
-                                            write!(stdout(), "{}:{} {}", message.peer_id, unsent, text).unwrap();
+                                            write!(stdout(), "{}:{}{}", message.peer_id, unsent, text).unwrap();
                                         }
+                                        MessageContent::File((name, blob)) => {
+                                            fs::write(["./files", &name].iter().collect::<PathBuf>(), blob).unwrap();
+                                            stdout().execute(MoveTo(0, i)).unwrap();
+                                            write!(stdout(), "{}:{}FILE: {}", message.peer_id, unsent, name).unwrap();
+                                        },
                                     }
                                     i += 1;
                                 }
@@ -299,13 +299,13 @@ fn main() {
                                     }
                                     KeyCode::Backspace => {
                                         if cursor != 0 {
-                                            input.swap_remove(cursor-1);
+                                            input.remove(cursor-1);
                                             cursor -= 1;
                                         }
                                     }
                                     KeyCode::Delete => {
                                         if cursor != input.len() {
-                                            input.swap_remove(cursor);
+                                            input.remove(cursor);
                                         }
                                     }
                                     KeyCode::Enter => {
@@ -316,10 +316,40 @@ fn main() {
                                 }
                             }
                         }
+
+                        let input: String = input.into_iter().collect();
+                        let content;
+                        if input.starts_with("/") {
+                            let parts: Vec<&str> = input.split_ascii_whitespace().collect();
+                            if parts.len() != 2 {
+                                // todo: log error
+                                continue;
+                            }
+                            match parts[0] {
+                                "/file" => {
+                                    let path = Path::new(parts[1]);
+                                    let file = fs::read_to_string(path);
+                                    if let Err(_) = file {
+                                        // todo: log error
+                                        continue;
+                                    }
+                                    content = MessageContent::File((
+                                        path.file_name().unwrap().to_str().unwrap().to_owned(), 
+                                        file.unwrap().into()
+                                    ));
+                                },
+                                _ => { 
+                                    // todo: log error
+                                    continue; 
+                                },
+                            }
+                        } else {
+                            content = MessageContent::Text(input);
+                        }
     
                         BackendToFrontendRequest::MessagePeer((
                             peer_conn.peer_id, 
-                            MessageContent::Text(input.into_iter().collect())
+                            content
                         )).write_into(&mut serv_writer).unwrap();
                     }
 
