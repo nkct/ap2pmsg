@@ -1,32 +1,20 @@
 use std::{
-    env, fs, io::{
-        stdin, 
-        stdout,
-        BufWriter, 
-        prelude::*, 
-        BufReader
-    }, net::{
-        TcpStream, 
-        SocketAddr
-    }, path::{Path, PathBuf}, process::exit, str::from_utf8, sync::{
-        Arc, 
-        Mutex
-    }, thread
+    env, 
+    fs, 
+    io::{stdin, stdout,BufWriter, prelude::*, BufReader}, 
+    iter::repeat, 
+    net::{TcpStream, SocketAddr}, 
+    path::{Path, PathBuf}, 
+    process::exit, 
+    str::from_utf8, 
+    sync::{Arc, Mutex}, 
+    thread
 };
 use ap2pmsg::*;
 use crossterm::{
-    cursor::{
-        SavePosition, 
-        RestorePosition, 
-        MoveToRow, 
-        MoveTo
-    }, 
+    cursor::{MoveTo, RestorePosition, SavePosition}, 
     ExecutableCommand, 
-    event::{
-        self, 
-        Event, 
-        KeyCode, KeyModifiers, KeyEventKind
-    }, 
+    event::{self, Event, KeyCode, KeyModifiers, KeyEventKind}, 
     terminal
 };
 use time::OffsetDateTime;
@@ -203,13 +191,17 @@ fn main() {
                                     }
                                     // clear line
                                     stdout().execute(MoveTo(0, i)).unwrap();
-                                    write!(stdout(), "{}", vec![" "; (window_size.0) as usize].into_iter().collect::<String>()).unwrap();
+                                    write!(stdout(), "{}", repeat(" ").take(window_size.0 as usize).collect::<String>()).unwrap();
+                                    // todo: display the correct sender 
                                     match message.content {
                                         MessageContent::Text(text) => {
                                             stdout().execute(MoveTo(0, i)).unwrap();
                                             write!(stdout(), "{}:{}{}", message.peer_id, unsent, text).unwrap();
                                         }
                                         MessageContent::File((name, blob)) => {
+                                            if !Path::new("./files").exists() {
+                                                fs::create_dir("./files").unwrap();
+                                            }
                                             fs::write(["./files", &name].iter().collect::<PathBuf>(), blob).unwrap();
                                             stdout().execute(MoveTo(0, i)).unwrap();
                                             write!(stdout(), "{}:{}FILE: {}", message.peer_id, unsent, name).unwrap();
@@ -253,10 +245,11 @@ fn main() {
                     
                     'message_loop: loop {
                         let window_size = terminal::size().unwrap();
-                        stdout().execute(MoveToRow(window_size.1 - 3)).unwrap();
-
+                        stdout().execute(MoveTo(0, window_size.1 - 3)).unwrap();
+                        
                         write!(stdout(), "Message {}: ", peer_conn.peer_name).unwrap();
-                        write!(stdout(), "\nPress Escape to exit.").unwrap();
+                        stdout().execute(MoveTo(0, window_size.1 - 1)).unwrap();
+                        write!(stdout(), "Press Escape to exit.").unwrap();
                         
                         let mut input: Vec<char> = Vec::new();
                         let mut cursor = input.len();
@@ -265,7 +258,7 @@ fn main() {
                         terminal::enable_raw_mode().unwrap();
                         'read_loop: loop {
                             stdout().execute(MoveTo(input_pos.0, input_pos.1)).unwrap();
-                            write!(stdout(), "{}", vec![" "; (window_size.0 - prompt_len) as usize].into_iter().collect::<String>()).unwrap();
+                            write!(stdout(), "{}", repeat(" ").take((window_size.0 - prompt_len) as usize).collect::<String>()).unwrap();
                             stdout().execute(MoveTo(input_pos.0, input_pos.1)).unwrap();
                             write!(stdout(), "{}", input.clone().into_iter().collect::<String>()).unwrap();
                             stdout().execute(MoveTo(input_pos.0 + cursor as u16, input_pos.1)).unwrap();
@@ -309,7 +302,6 @@ fn main() {
                                         }
                                     }
                                     KeyCode::Enter => {
-                                        terminal::disable_raw_mode().unwrap();
                                         break 'read_loop;
                                     }
                                     _ => {}
@@ -318,19 +310,26 @@ fn main() {
                         }
 
                         let input: String = input.into_iter().collect();
+                        let error_line = window_size.1 - 2;
                         let content;
                         if input.starts_with("/") {
                             let parts: Vec<&str> = input.split_ascii_whitespace().collect();
                             if parts.len() != 2 {
-                                // todo: log error
+                                stdout().execute(MoveTo(0, error_line)).unwrap();
+                                write!(stdout(), "{}", repeat(" ").take(window_size.0 as usize).collect::<String>()).unwrap();
+                                stdout().execute(MoveTo(0, error_line)).unwrap();
+                                write!(stdout(), "Error: Incorrect command format; Should be: /[COMMAND] [PATH]").unwrap();
                                 continue;
                             }
                             match parts[0] {
                                 "/file" => {
                                     let path = Path::new(parts[1]);
                                     let file = fs::read_to_string(path);
-                                    if let Err(_) = file {
-                                        // todo: log error
+                                    if let Err(e) = file {
+                                        stdout().execute(MoveTo(0, error_line)).unwrap();
+                                        write!(stdout(), "{}", repeat(" ").take(window_size.0 as usize).collect::<String>()).unwrap();
+                                        stdout().execute(MoveTo(0, error_line)).unwrap();
+                                        write!(stdout(), "Error: Could not open file; {}", e).unwrap();
                                         continue;
                                     }
                                     content = MessageContent::File((
@@ -339,13 +338,22 @@ fn main() {
                                     ));
                                 },
                                 _ => { 
-                                    // todo: log error
+                                    stdout().execute(MoveTo(0, error_line)).unwrap();
+                                    write!(stdout(), "{}", repeat(" ").take(window_size.0 as usize).collect::<String>()).unwrap();
+                                    stdout().execute(MoveTo(0, error_line)).unwrap();
+                                    write!(stdout(), "Error: Unrecognized command").unwrap();
                                     continue; 
                                 },
                             }
                         } else {
                             content = MessageContent::Text(input);
                         }
+
+                        // clear the error line
+                        stdout().execute(MoveTo(0, error_line)).unwrap();
+                        write!(stdout(), "{}", repeat(" ").take(window_size.0 as usize).collect::<String>()).unwrap();
+                        
+                        terminal::disable_raw_mode().unwrap();
     
                         BackendToFrontendRequest::MessagePeer((
                             peer_conn.peer_id, 

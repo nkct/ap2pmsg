@@ -167,45 +167,44 @@ fn listen(listener: TcpListener, setttings: Setttings) {
 
         let addr = conn.peer_addr().unwrap();
 
-        if let Ok(initial_request) = InitialRequest::read_from(&mut reader) {
-            match initial_request {
-                InitialRequest::Peer(peer_request) => {
-                    info!("New peer connection: {}", addr);       
-                    let frontend_conn_clone;
-                    if let Some(ref conn) = frontend_conn {
-                        frontend_conn_clone = Some(conn.try_clone().unwrap());
-                    } else {
-                        frontend_conn_clone = None;
-                    }
-                    thread::spawn(move || {
-                        handle_peer(conn, peer_request, setttings, frontend_conn_clone);
-                    });
-                },
-                InitialRequest::Frontend(frontend_request) => {
-                    if let Some(ref handle) = frontend_thread {
-                        if !handle.is_finished() {
-                            BackendToFrontendResponse::LinkingResult(Err(format!(
-                                "Linking to backend refused; this backend is already serving a frontend at {}", addr
-                            ))).write_into(&mut writer).unwrap();
-                            info!("Refused linking request from frontend at {}", addr);
-                            break;
-                        }
-                    }
-        
-                    if let BackendToFrontendRequest::LinkingRequest = frontend_request {
-                        info!("New frontend connection: {}", addr); 
-                        frontend_conn = Some(conn.try_clone().unwrap());           
-                        frontend_thread = Some(thread::spawn(move || {
-                            handle_frontend(conn, setttings);
-                        }));
+        match InitialRequest::read_from(&mut reader) {
+          Ok(initial_request) => { match initial_request {
+            InitialRequest::Peer(peer_request) => {
+                info!("New peer connection: {}", addr);       
+                let frontend_conn_clone;
+                if let Some(ref conn) = frontend_conn {
+                    frontend_conn_clone = Some(conn.try_clone().unwrap());
+                } else {
+                    frontend_conn_clone = None;
+                }
+                thread::spawn(move || {
+                    handle_peer(conn, peer_request, setttings, frontend_conn_clone);
+                });
+            },
+            InitialRequest::Frontend(frontend_request) => {
+                if let Some(ref handle) = frontend_thread {
+                    if !handle.is_finished() {
+                        BackendToFrontendResponse::LinkingResult(Err(format!(
+                            "Linking to backend refused; this backend is already serving a frontend at {}", addr
+                        ))).write_into(&mut writer).unwrap();
+                        info!("Refused linking request from frontend at {}", addr);
+                        break;
                     }
                 }
+        
+                if let BackendToFrontendRequest::LinkingRequest = frontend_request {
+                    info!("New frontend connection: {}", addr); 
+                    frontend_conn = Some(conn.try_clone().unwrap());           
+                    frontend_thread = Some(thread::spawn(move || {
+                        handle_frontend(conn, setttings);
+                    }));
+                }
             }
-        } else {
-            // todo: log the incorrect request
-            warn!("Incorrect request");
+        }},
+        Err(e) => {
+            warn!("Incorrect request; {}", e);
             continue;
-        }
+        }}
     }
 }
 
