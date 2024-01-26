@@ -21,7 +21,8 @@ struct Setttings {
     terminal_emulator: &'static str,
     db_path: &'static str,
     self_name: &'static str,
-    peer_timeout: Duration
+    peer_timeout: Duration,
+    max_log_len: usize,
 }
 impl Default for Setttings {
     fn default() -> Self {
@@ -33,6 +34,7 @@ impl Default for Setttings {
             db_path: "./local_storage.db",
             self_name: "Default Name",
             peer_timeout: Duration::from_secs(1),
+            max_log_len: 1000,
         }
     }
 }
@@ -216,7 +218,7 @@ fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Sett
 
     let local_addr = conn.local_addr().unwrap();
 
-    debug!("Recieved PeerToPeerRequest::{:#?}", peer_request);
+    debug!("Recieved PeerToPeerRequest::{:#.*?}", setttings.max_log_len, peer_request);
     match peer_request {
         PeerToPeerRequest::ProposeConnection(self_id, peer_name, peer_addr) => {
             let peer_id = db_conn.generate_peer_id().unwrap();
@@ -255,7 +257,6 @@ fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Sett
 }
 
 fn recieve_message(msg: Message, db_conn: &DbConn, local_addr: SocketAddr, frontend_conn: Option<&TcpStream>) {
-    // todo: handle messages from unregistered peer
     // handle edge case where a host is sending a message to itself
     if (db_conn.get_peer_addr(msg.self_id).unwrap() == local_addr) && (db_conn.get_message(msg.message_id).unwrap().is_some()) {
         db_conn.mark_as_recieved(msg.message_id).unwrap();
@@ -316,7 +317,7 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
     loop {
         match BackendToFrontendRequest::read_from(&mut frontend_reader) {
             Ok(request) => {
-                debug!("Recieved BackendToFrontendRequest::{:#?}", request);
+                debug!("Recieved BackendToFrontendRequest::{:#.*?}", setttings.max_log_len, request);
                 match request {
                     BackendToFrontendRequest::KillRefresher => {
                         RefreshRequest::Kill.write_into(&mut frontend_writer).unwrap();
@@ -365,7 +366,6 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
                         let peer_conn_result = TcpStream::connect_timeout(&peer_addr, setttings.peer_timeout);
                         if let Err(e) = peer_conn_result {
                             warn!("Could not connect to peer, {}", e);
-                            // todo: inform frontend about failure
                             continue;
                         }
                         let peer_conn = peer_conn_result.unwrap();

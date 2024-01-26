@@ -116,7 +116,6 @@ fn main() {
                 }));
 
                 loop {
-                    // todo: change to crossterm key event
                     println!("Type '+' to add a connection");
                     println!("\nSelect device: ");
                     input = String::new();
@@ -192,7 +191,6 @@ fn main() {
                                     // clear line
                                     stdout().execute(MoveTo(0, i)).unwrap();
                                     write!(stdout(), "{}", repeat(" ").take(window_size.0 as usize).collect::<String>()).unwrap();
-                                    // todo: display the correct sender 
                                     match message.content {
                                         MessageContent::Text(text) => {
                                             stdout().execute(MoveTo(0, i)).unwrap();
@@ -324,7 +322,7 @@ fn main() {
                             match parts[0] {
                                 "/file" => {
                                     let path = Path::new(parts[1]);
-                                    let file = fs::read_to_string(path);
+                                    let file = fs::read(path);
                                     if let Err(e) = file {
                                         stdout().execute(MoveTo(0, error_line)).unwrap();
                                         write!(stdout(), "{}", repeat(" ").take(window_size.0 as usize).collect::<String>()).unwrap();
@@ -334,7 +332,7 @@ fn main() {
                                     }
                                     content = MessageContent::File((
                                         path.file_name().unwrap().to_str().unwrap().to_owned(), 
-                                        file.unwrap().into()
+                                        file.unwrap()
                                     ));
                                 },
                                 _ => { 

@@ -1,6 +1,6 @@
 [package]
 name = "ap2pmsg"
-version = "0.13.1"
+version = "0.13.2"
 edition = "2021"
 
 [dependencies]
@@ -15,3 +15,24 @@ crossterm = "0.27.0"
 env_logger = "0.10.1"
 log = "0.4.20"
 local-ip-address = "0.5.6"
+
+# todo:
+# clear data
+# handle requests from unknown peers
+# default terminal on windows
+# fix messages not displaying (bad query returns) on linux
+# support sending binary files (read as blob instead of string)
+# ? delete me peer request
+# running backend in the background
+# inform frontend about failure when creating peer connection
+# optimize big messages
+# don't fetch repeatedly files on every ListMessages when they're already saved
+# 
+# get_reader_writer(conn: TcpStream)
+# trace logging on lib functions
+# look into replacing sqlite with nosql
+# close server request
+# 
+# change connection adding to use crossterm
+# display the correct sender 
+

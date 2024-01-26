@@ -7,19 +7,17 @@ use std::{
     fs::File, 
     path::Path, str::from_utf8, 
 };
-use log::debug;
+use log::trace;
 use serde::{Serialize, Deserialize};
 use time::{OffsetDateTime, format_description};
 use rand::rngs::OsRng;
 use rand_unique::RandomSequenceBuilder;
 
-// todo: get_reader_writer(conn: TcpStream)
-
 pub const DATETIME_FORMAT: &str = "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3][offset_hour]:[offset_minute]";
 
 pub trait Writable {
     fn write_into(&self, writer: &mut BufWriter<TcpStream>) -> Result<(), io::Error> where Self: Serialize {
-        debug!("Writing {}", std::any::type_name::<Self>());
+        trace!("Writing {}", std::any::type_name::<Self>());
         let message = serde_json::to_string(self)?;
         let len = message.len() as u32;
         let mut send = Vec::new();
@@ -27,7 +25,7 @@ pub trait Writable {
         send.extend_from_slice(&message.as_bytes());
         writer.write(&send)?;
         writer.flush()?;
-        debug!("Wrote: {} with length {}", message, len);
+        trace!("Wrote: {} with length {}", message, len);
         Ok(())
     }
 }
@@ -35,12 +33,12 @@ pub trait Writable {
 pub trait Readable {
     fn read_from(reader: &mut BufReader<TcpStream>) -> Result<Self, Box<dyn Error>> 
     where Self: Sized + for<'a> Deserialize<'a> {
-        debug!("Reading {}", std::any::type_name::<Self>());
+        trace!("Reading {}", std::any::type_name::<Self>());
         let mut len = [0;4];
         reader.read_exact(&mut len)?;
         let mut buf = vec![0; u32::from_be_bytes(len) as usize];
         reader.read_exact(&mut buf)?;
-        debug!("Read {} with length {}", from_utf8(&buf)?, u32::from_be_bytes(len));
+        trace!("Read {} with length {}", from_utf8(&buf)?, u32::from_be_bytes(len));
         Ok(serde_json::from_str::<Self>(from_utf8(&buf)?)?) 
     }
 }
@@ -64,8 +62,6 @@ impl Readable for InitialRequest {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum BackendToFrontendRequest {
-    // close server
-    // clear data
     LinkingRequest,
     EstablishPeerConnection(SocketAddr),
     ListMessages(u32, OffsetDateTime, OffsetDateTime),
@@ -224,7 +220,6 @@ impl From<io::Error> for DbErr {
     }
 }
 
-// look into replacing sqlite with nosql
 pub struct DbConn(rusqlite::Connection);
 impl DbConn {
     pub fn new(conn: rusqlite::Connection) -> Self {
