@@ -434,7 +434,7 @@ impl DbConn {
                 let filepath = [self.file_storage_path.clone(), filename.into()].iter().collect::<PathBuf>();
                 fs::write(&filepath, blob).unwrap();
 
-                return Ok(("FILE".to_owned(), filepath.to_str().unwrap().into()));
+                return Ok(("FILE".to_owned(), filename.to_owned().into_bytes()));
             },
         }
     }
