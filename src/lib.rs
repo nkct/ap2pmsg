@@ -427,12 +427,12 @@ impl DbConn {
             MessageContent::Text(content) => {
                 return Ok(("TEXT".to_owned(), content.to_owned().into_bytes()));
             }
-            MessageContent::File((filename, content)) => {
+            MessageContent::File((filename, blob)) => {
                 if !&self.file_storage_path.exists() {
                     fs::create_dir(&self.file_storage_path).unwrap();
                 }
                 let filepath = [self.file_storage_path.clone(), filename.into()].iter().collect::<PathBuf>();
-                fs::write(&filepath, content).unwrap();
+                fs::write(&filepath, blob).unwrap();
 
                 return Ok(("FILE".to_owned(), filepath.to_str().unwrap().into()));
             },
@@ -475,14 +475,15 @@ impl DbConn {
         Ok(self.db_conn.last_insert_rowid() as u32)
     }
 
-    fn deserialize_message_content(content_type: &str, blob: Vec<u8>) -> Result<MessageContent, DbErr> {
+    fn deserialize_message_content(&self, content_type: &str, blob: Vec<u8>) -> Result<MessageContent, DbErr> {
         match content_type {
             "TEXT" => {
                 return Ok(MessageContent::Text(String::from_utf8(blob)?));
             }
             "FILE" => {
-                let file_name = String::from_utf8(blob.clone())?;
-                return Ok(MessageContent::File((file_name, blob)));
+                let filename = String::from_utf8(blob)?;
+                let file_content = fs::read([self.file_storage_path.clone(), filename.clone().into()].iter().collect::<PathBuf>())?;
+                return Ok(MessageContent::File((filename, file_content)));
             }
             _ => {
                 return Err(DbErr::InvalidMessageContentType)?;
@@ -515,7 +516,7 @@ impl DbConn {
 
         let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
 
-        let content = DbConn::deserialize_message_content(values.5.as_str(), values.6)?;
+        let content = self.deserialize_message_content(values.5.as_str(), values.6)?;
 
         Ok(Some(Message {
             message_id: values.0,
@@ -556,7 +557,7 @@ impl DbConn {
         for values in rows {
             let values = values?;
 
-            let content = DbConn::deserialize_message_content(values.5.as_str(), values.6)?;
+            let content = self.deserialize_message_content(values.5.as_str(), values.6)?;
             
             msgs.push(Message {
                 message_id: values.0,
@@ -597,7 +598,7 @@ impl DbConn {
         for values in rows {
             let values = values?;
 
-            let content = DbConn::deserialize_message_content(values.5.as_str(), values.6)?;
+            let content = self.deserialize_message_content(values.5.as_str(), values.6)?;
 
             let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
             msgs.push(Message {
