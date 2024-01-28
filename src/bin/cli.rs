@@ -4,7 +4,7 @@ use std::{
     io::{stdin, stdout,BufWriter, prelude::*, BufReader}, 
     iter::repeat, 
     net::{TcpStream, SocketAddr}, 
-    path::{Path, PathBuf}, 
+    path::Path, 
     process::exit, 
     str::from_utf8, 
     sync::{Arc, Mutex}, 
@@ -196,11 +196,7 @@ fn main() {
                                             stdout().execute(MoveTo(0, i)).unwrap();
                                             write!(stdout(), "{}:{}{}", message.peer_id, unsent, text).unwrap();
                                         }
-                                        MessageContent::File((name, blob)) => {
-                                            if !Path::new("./files").exists() {
-                                                fs::create_dir("./files").unwrap();
-                                            }
-                                            fs::write(["./files", &name].iter().collect::<PathBuf>(), blob).unwrap();
+                                        MessageContent::File((name, _blob)) => {
                                             stdout().execute(MoveTo(0, i)).unwrap();
                                             write!(stdout(), "{}:{}FILE: {}", message.peer_id, unsent, name).unwrap();
                                         },

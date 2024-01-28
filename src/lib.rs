@@ -2,10 +2,10 @@ use std::{
     net::{SocketAddr, TcpStream}, 
     io::{BufWriter, self, Write, BufReader, Read}, 
     error::Error, 
-    fmt::Display, 
+    fmt::{Debug, Display}, 
     string, 
-    fs::File, 
-    path::Path, str::from_utf8, 
+    fs::{self, File}, 
+    path::{Path, PathBuf}, str::from_utf8, 
 };
 use log::trace;
 use serde::{Serialize, Deserialize};
@@ -25,7 +25,7 @@ pub trait Writable {
         send.extend_from_slice(&message.as_bytes());
         writer.write(&send)?;
         writer.flush()?;
-        trace!("Wrote: {} with length {}", message, len);
+        trace!("Wrote: {:.*} with length {}", u8::MAX as usize, message, len);
         Ok(())
     }
 }
@@ -38,7 +38,7 @@ pub trait Readable {
         reader.read_exact(&mut len)?;
         let mut buf = vec![0; u32::from_be_bytes(len) as usize];
         reader.read_exact(&mut buf)?;
-        trace!("Read {} with length {}", from_utf8(&buf)?, u32::from_be_bytes(len));
+        trace!("Read {:.*} with length {}", u8::MAX as usize, from_utf8(&buf)?, u32::from_be_bytes(len));
         Ok(serde_json::from_str::<Self>(from_utf8(&buf)?)?) 
     }
 }
@@ -102,10 +102,22 @@ pub enum PeerToPeerResponse {
 impl Writable for PeerToPeerResponse {}
 impl Readable for PeerToPeerResponse {}
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize)]
 pub enum MessageContent {
     Text(String),
     File((String, Vec<u8>)),
+}
+impl Debug for MessageContent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MessageContent::Text(text) => {
+                write!(f, "TEXT: {:?}", text)
+            }
+            MessageContent::File((filename, blob)) => {
+                write!(f, "FILE: {:?} with length: {}", filename, blob.len())
+            },
+        }
+    }
 }
 
 // sender_id is unique to each connection
@@ -220,21 +232,24 @@ impl From<io::Error> for DbErr {
     }
 }
 
-pub struct DbConn(rusqlite::Connection);
+pub struct DbConn {
+    db_conn: rusqlite::Connection,
+    file_storage_path: PathBuf,
+}
 impl DbConn {
-    pub fn new(conn: rusqlite::Connection) -> Self {
-        DbConn(conn)
+    pub fn new(db_conn: rusqlite::Connection) -> Self {
+        DbConn { db_conn, file_storage_path: "./files".into() }
     }
 
     pub fn table_exists(&self, table_name: &str) -> rusqlite::Result<bool> {
-        Ok(self.0
+        Ok(self.db_conn
             .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = :table_name;")?
             .query([table_name])?.next().unwrap().is_some()
         )
     }    
 
     pub fn create_messages_table(&self) -> Result<usize, Box<dyn std::error::Error>> {
-        Ok(self.0.execute("
+        Ok(self.db_conn.execute("
         CREATE TABLE Messages (
             message_id INTEGER, 
             connection_id INTEGER,
@@ -248,7 +263,7 @@ impl DbConn {
     }
 
     pub fn create_connections_table(&self) -> Result<usize, Box<dyn std::error::Error>> {
-        Ok(self.0.execute("
+        Ok(self.db_conn.execute("
         CREATE TABLE Connections (
             connection_id INTEGER,
             peer_id INTEGER NOT NULL UNIQUE, 
@@ -265,7 +280,7 @@ impl DbConn {
         let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
         // for the sake of brevity
         let c = connection;
-        let mut stmt = self.0.prepare("INSERT INTO Connections 
+        let mut stmt = self.db_conn.prepare("INSERT INTO Connections 
         (peer_id, self_id, peer_name, peer_addr, online, time_established) VALUES 
         (?1, ?2, ?3, ?4, ?5, ?6);")?;
         let res = stmt.execute((
@@ -279,7 +294,7 @@ impl DbConn {
     }
 
     pub fn get_peer_addr(&self, peer_id: u32) -> Result<SocketAddr, DbErr>{
-        let mut stmt = self.0.prepare("
+        let mut stmt = self.db_conn.prepare("
             SELECT peer_addr FROM Connections 
             WHERE peer_id == ?1
         ;")?;
@@ -290,7 +305,7 @@ impl DbConn {
     }
 
     pub fn get_peer_name(&self, peer_id: u32) -> Result<String, DbErr>{
-        let mut stmt = self.0.prepare("
+        let mut stmt = self.db_conn.prepare("
             SELECT peer_name FROM Connections 
             WHERE peer_id == ?1
         ;")?;
@@ -301,7 +316,7 @@ impl DbConn {
     }
 
     pub fn peer_online(&self, peer_id: u32) -> Result<bool, DbErr>{
-        let mut stmt = self.0.prepare("
+        let mut stmt = self.db_conn.prepare("
             SELECT online FROM Connections 
             WHERE peer_id == ?1
         ;")?;
@@ -312,7 +327,7 @@ impl DbConn {
     }
 
     pub fn set_peer_online(&self, peer_id: u32, online: bool) -> Result<usize, DbErr> {
-        let mut stmt = self.0.prepare("
+        let mut stmt = self.db_conn.prepare("
             UPDATE Connections SET online = ?1
             WHERE peer_id == ?2
         ;")?;
@@ -321,7 +336,7 @@ impl DbConn {
 
     pub fn mark_as_recieved(&self, msg_id: u32) -> Result<usize, DbErr> {
         let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
-        let mut stmt = self.0.prepare("
+        let mut stmt = self.db_conn.prepare("
             UPDATE Messages SET time_recieved = ?1
             WHERE message_id == ?2
         ;")?;
@@ -331,7 +346,7 @@ impl DbConn {
     pub fn bulk_mark_as_recieved(&self, msg_ids: Vec<u32>) -> Result<usize, DbErr> {
         let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
         let placeholders: String = std::iter::repeat("?").take(msg_ids.len()).collect::<Vec<_>>().join(", ");
-        let mut stmt = self.0.prepare(&format!("
+        let mut stmt = self.db_conn.prepare(&format!("
             UPDATE Messages SET time_recieved = ?1
             WHERE message_id IN ({})
         ;", placeholders))?;
@@ -350,7 +365,7 @@ impl DbConn {
     }
 
     pub fn get_connection(&self, connection_id: u32) -> Result<Connection, DbErr> {
-        let mut stmt = self.0.prepare("
+        let mut stmt = self.db_conn.prepare("
             SELECT peer_id, self_id, peer_name, peer_addr, online, time_established FROM Connections 
             WHERE connection_id == ?1
         ;")?;
@@ -376,7 +391,7 @@ impl DbConn {
     }
 
     pub fn get_connections(&self) -> Result<Vec<Connection>, DbErr> {
-        let mut stmt = self.0.prepare("
+        let mut stmt = self.db_conn.prepare("
             SELECT peer_id, self_id, peer_name, peer_addr, online, time_established FROM Connections
         ;")?;
         let rows = stmt.query_map([], |row| {
@@ -407,57 +422,57 @@ impl DbConn {
         return Ok(conns);
     }
 
-    fn serialize_message_content(content: MessageContent) -> Result<(String, Vec<u8>), DbErr> {
+    fn serialize_message_content(&self, content: &MessageContent) -> Result<(String, Vec<u8>), DbErr> {
         match content {
             MessageContent::Text(content) => {
-                return Ok(("TEXT".to_owned(), content.into()));
+                return Ok(("TEXT".to_owned(), content.to_owned().into_bytes()));
             }
             MessageContent::File((filename, content)) => {
-                if filename.len() > u8::MAX as usize {
-                    return Err(DbErr::FilenameTooLong);
+                if !&self.file_storage_path.exists() {
+                    fs::create_dir(&self.file_storage_path).unwrap();
                 }
-                let mut blob = vec![filename.len() as u8];
-                blob.extend_from_slice(filename.as_bytes());
-                blob.extend_from_slice(&content);
-                return Ok(("FILE".to_owned(), blob));
+                let filepath = [self.file_storage_path.clone(), filename.into()].iter().collect::<PathBuf>();
+                fs::write(&filepath, content).unwrap();
+
+                return Ok(("FILE".to_owned(), filepath.to_str().unwrap().into()));
             },
         }
     }
 
-    pub fn new_message(&self, peer_id: u32, content: MessageContent) -> Result<Message, Box<dyn std::error::Error>> {
-        let (content_type, blob) = DbConn::serialize_message_content(content)?;
+    pub fn new_message(&self, peer_id: u32, content: &MessageContent) -> Result<Message, Box<dyn std::error::Error>> {
+        let (content_type, blob) = self.serialize_message_content(content)?;
         
         let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
-        self.0.execute("
+        self.db_conn.execute("
         INSERT INTO Messages (connection_id, time_sent, time_recieved, content_type, content) VALUES 
         ((SELECT connection_id FROM Connections WHERE peer_id == ?1), ?2, NULL, ?3, ?4)", 
         (peer_id, get_now().format(datetime_format).unwrap(), content_type, blob))?;
         
-        let msg = self.get_message(self.0.last_insert_rowid() as u32).unwrap().unwrap();
+        let msg = self.get_message(self.db_conn.last_insert_rowid() as u32).unwrap().unwrap();
         return Ok(msg);
     }
 
-    pub fn insert_message(&self, msg: Message) -> Result<u32, Box<dyn std::error::Error>> {
-        let (content_type, blob) = DbConn::serialize_message_content(msg.content)?;
+    pub fn insert_message(&self, msg: &Message) -> Result<u32, Box<dyn std::error::Error>> {
+        let (content_type, blob) = self.serialize_message_content(&msg.content)?;
 
         let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
-        self.0.execute("
+        self.db_conn.execute("
         INSERT INTO Messages (message_id, connection_id, time_sent, time_recieved, content_type, content) VALUES 
         (?1, (SELECT connection_id FROM Connections WHERE peer_id == ?2), ?3, ?4, ?5, ?6)", 
         (msg.message_id, msg.self_id, msg.time_sent.format(datetime_format).unwrap(), get_now().format(datetime_format).unwrap(), content_type, blob))?;
         
-        Ok(self.0.last_insert_rowid() as u32)
+        Ok(self.db_conn.last_insert_rowid() as u32)
     }
 
     pub fn update_message_content(&self, msg_id: u32, content: MessageContent) -> Result<u32, Box<dyn std::error::Error>> {
-        let (content_type, blob) = DbConn::serialize_message_content(content)?;
+        let (content_type, blob) = self.serialize_message_content(&content)?;
 
-        self.0.execute("
+        self.db_conn.execute("
         UPDATE Messages  SET content_type = ?1, content = ?2;
         WHERE message_id == ?3",
         (content_type, blob, msg_id))?;
         
-        Ok(self.0.last_insert_rowid() as u32)
+        Ok(self.db_conn.last_insert_rowid() as u32)
     }
 
     fn deserialize_message_content(content_type: &str, blob: Vec<u8>) -> Result<MessageContent, DbErr> {
@@ -466,10 +481,8 @@ impl DbConn {
                 return Ok(MessageContent::Text(String::from_utf8(blob)?));
             }
             "FILE" => {
-                let filename_len = blob[0] as usize;
-                let filename = String::from_utf8((&blob[1..=filename_len]).to_vec())?;
-                let file_content = (&blob[filename_len+1..]).to_vec();
-                return Ok(MessageContent::File((filename, file_content)));
+                let file_name = String::from_utf8(blob.clone())?;
+                return Ok(MessageContent::File((file_name, blob)));
             }
             _ => {
                 return Err(DbErr::InvalidMessageContentType)?;
@@ -478,7 +491,7 @@ impl DbConn {
     }
 
     pub fn get_message(&self, message_id: u32) -> Result<Option<Message>, DbErr> {
-        let mut stmt = self.0.prepare("
+        let mut stmt = self.db_conn.prepare("
             SELECT message_id, peer_id, self_id, time_sent, time_recieved, content_type, content FROM Messages 
             NATURAL JOIN Connections
             WHERE message_id == ?1
@@ -518,7 +531,7 @@ impl DbConn {
 
     pub fn get_messages(&self, peer_id: u32, since: OffsetDateTime, untill: OffsetDateTime) -> Result<Vec<Message>, DbErr> {
         let datetime_format =  &format_description::parse(DATETIME_FORMAT).unwrap();
-        let mut stmt = self.0.prepare("
+        let mut stmt = self.db_conn.prepare("
             SELECT message_id, peer_id, self_id, time_sent, time_recieved, content_type, content FROM Messages
             NATURAL JOIN Connections
             WHERE peer_id = ?1 AND time_sent BETWEEN ?2 AND ?3
@@ -561,7 +574,7 @@ impl DbConn {
     }
 
     pub fn get_unrecieved_for(&self, peer_id: u32) -> Result<Vec<Message>, DbErr> {
-        let mut stmt = self.0.prepare("
+        let mut stmt = self.db_conn.prepare("
             SELECT message_id, peer_id, self_id, time_sent, time_recieved, content_type, content FROM Messages
             NATURAL JOIN Connections
             WHERE peer_id = ?1 AND time_recieved IS NULL

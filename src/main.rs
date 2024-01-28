@@ -233,7 +233,7 @@ fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Sett
                 }
             }
         },
-        PeerToPeerRequest::Message(msg) => {
+        PeerToPeerRequest::Message(ref msg) => {
             PeerToPeerResponse::Recieved(msg.message_id).write_into(&mut peer_writer).unwrap();
             info!("Confirmed recieving message {} from {}", msg.message_id, peer_addr);
             recieve_message(msg, &db_conn, local_addr, frontend_conn.as_ref())
@@ -249,19 +249,19 @@ fn handle_peer(conn: TcpStream, peer_request: PeerToPeerRequest, setttings: Sett
             let mut msg_ids = msg_ids.into_iter();
             let first = msg_ids.next().unwrap();
             info!("Confirmed recieving messages {} from {}", msg_ids.fold(first.to_string(), |acc, id| format!("{acc}, {id}")), peer_addr);
-            for msg in msgs {
+            for ref msg in msgs {
                 recieve_message(msg, &db_conn, local_addr, frontend_conn.as_ref())
             }
         }
     }
 }
 
-fn recieve_message(msg: Message, db_conn: &DbConn, local_addr: SocketAddr, frontend_conn: Option<&TcpStream>) {
+fn recieve_message(msg: &Message, db_conn: &DbConn, local_addr: SocketAddr, frontend_conn: Option<&TcpStream>) {
     // handle edge case where a host is sending a message to itself
     if (db_conn.get_peer_addr(msg.self_id).unwrap() == local_addr) && (db_conn.get_message(msg.message_id).unwrap().is_some()) {
         db_conn.mark_as_recieved(msg.message_id).unwrap();
     } else {
-        db_conn.insert_message(msg).unwrap();
+        db_conn.insert_message(&msg).unwrap();
         if let Some(frontend_conn) = frontend_conn {
             let mut frontend_writer = BufWriter::new(frontend_conn.try_clone().unwrap());
             RefreshRequest::Message.write_into(&mut frontend_writer).unwrap();
@@ -324,7 +324,7 @@ fn handle_frontend(conn: TcpStream, setttings: Setttings) {
                         debug!("Killed refresher");
                     },
                     BackendToFrontendRequest::MessagePeer((peer_id, content)) => {
-                        let msg = db_conn.new_message(peer_id, content).unwrap();
+                        let msg = db_conn.new_message(peer_id, &content).unwrap();
                         RefreshRequest::Message.write_into(&mut frontend_writer).unwrap();
                         
                         let peer_addr = &db_conn.get_peer_addr(peer_id).unwrap();
