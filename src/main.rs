@@ -38,23 +38,45 @@ macro_rules! log {
     };
 }
 
+
 fn main() -> Result<(), isize> {
     let mut args = env::args();
-    println!("args: {:?}", args);
+    let prog_path = args.next().expect("ARGS CANNOT BE EMPTY");
+    let mut next_arg = || -> Result<String, isize> {
+        if let Some(arg) = args.next() {
+            return Ok(arg);
+        } else {
+            log!("ERROR: not enough arguments, see `{prog_path} help` for usage info");
+            return Err(-1);
+        }
+    };
     
-    let path = args.next().expect("ARGS CANNOT BE EMPTY");
-    
-    let verb = args.next();
-    if verb.is_none() {
-        log!("ERROR: not enough arguments, see `{path} help` for usage info");
-        return Err(-1);
-    }
-    match verb.unwrap().as_str() {
-        "conn" | "conns" | "connection" | "connections" => { todo!() }
+    let command = next_arg()?;
+    match command.as_str() {
+        "conn" | "conns" | "connection" | "connections" => { 
+            match next_arg()?.as_str() {
+                "l" | "-l" | "list"    | "--list"    => { todo!() }
+                "s" | "-s" | "select"  | "--select"  => { todo!() }
+                "r" | "-r" | "request" | "--request" => { todo!() }
+                "a" | "-a" | "accept"  | "--accept"  => { todo!() }
+                subcommand => {
+                    log!("ERROR: '{subcommand}' is not a recognized subcommand for {command}, see `{prog_path} help` for usage info");
+                    return Err(-1);
+                }
+            }
+        }
         "msg"  | "msgs"  | "message"    | "messages"    => { todo!() }
-        "help" | "-h"    | "--help"                     => { todo!() }
+        "help" | "-h"    | "--help"                     => { 
+            println!("Usage: {prog_path} [conn | conns | connection | connections] [l | -l | list    | --list   ]");
+            print!("{}", " ".repeat(50 + prog_path.len()));              println!("[s | -s | select  | --select ]");
+            print!("{}", " ".repeat(50 + prog_path.len()));              println!("[r | -r | request | --request]");
+            print!("{}", " ".repeat(50 + prog_path.len()));              println!("[a | -a | accept  | --accept ]");
+            println!("       {prog_path} [msg  | msgs  | message    | messages   ]");
+            println!("       {prog_path} [help | -h    | --help   ]");
+            println!("       └─▸ Print this message and exit.");
+        }
         _ => {
-            log!("ERROR: unrecognized verb, see `{path} help` for usage info");
+            log!("ERROR: '{command}' is not a recognized command, see `{prog_path} help` for usage info");
             return Err(-1);
         }
     }
