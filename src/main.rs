@@ -55,10 +55,10 @@ fn main() -> Result<(), isize> {
     match command.as_str() {
         "conn" | "conns" | "connection" | "connections" => { 
             match next_arg()?.as_str() {
-                "l" | "-l" | "list"    | "--list"    => { todo!() }
+                "l" | "-l" | "list"    | "--list"    => { todo!("listing connections") }
                 "s" | "-s" | "select"  | "--select"  => { 
                     if let Ok(id) = next_arg()?.parse::<u64>() {
-                        println!("ID: {id}"); todo!()
+                        println!("ID: {id}"); todo!("selecting a connection")
                     } else {
                         log!("ERROR: <ID> must be a valid integer");
                         return Err(-1);
@@ -66,11 +66,11 @@ fn main() -> Result<(), isize> {
                 }
                 "r" | "-r" | "request" | "--request" => { 
                     let addr = next_arg()?;
-                    println!("ADDR: {addr}"); todo!()
+                    println!("ADDR: {addr}"); todo!("requesting a connection")
                 }
                 "a" | "-a" | "accept"  | "--accept"  => { 
                     if let Ok(id) = next_arg()?.parse::<u64>() {
-                        println!("ID: {id}"); todo!()
+                        println!("ID: {id}"); todo!("accepting a connection")
                     } else {
                         log!("ERROR: <ID> must be a valid integer");
                         return Err(-1);
@@ -84,14 +84,14 @@ fn main() -> Result<(), isize> {
         }
         "msg"  | "msgs"  | "message"    | "messages"    => { 
             match next_arg()?.as_str() {
-                "l" | "-l" | "list" | "--list" => { todo!() }
+                "l" | "-l" | "list" | "--list" => { todo!("listing messages") }
                 "s" | "-s" | "send" | "--send" => { 
                     let msg = next_arg()?;
-                    println!("MSG: {msg}"); todo!()
+                    println!("MSG: {msg}"); todo!("sending a message")
                 }
                 "b" | "-b" | "bulk" | "--bulk" => { 
                     let msgs = next_arg()?;
-                    println!("MSGS: {msgs}"); todo!()
+                    println!("MSGS: {msgs}"); todo!("sending bulk messages")
                 }
                 subcommand => {
                     log!("ERROR: '{subcommand}' is not a recognized subcommand for {command}, see `{prog_path} help` for usage info");
