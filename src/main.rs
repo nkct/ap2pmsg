@@ -56,22 +56,59 @@ fn main() -> Result<(), isize> {
         "conn" | "conns" | "connection" | "connections" => { 
             match next_arg()?.as_str() {
                 "l" | "-l" | "list"    | "--list"    => { todo!() }
-                "s" | "-s" | "select"  | "--select"  => { todo!() }
-                "r" | "-r" | "request" | "--request" => { todo!() }
-                "a" | "-a" | "accept"  | "--accept"  => { todo!() }
+                "s" | "-s" | "select"  | "--select"  => { 
+                    if let Ok(id) = next_arg()?.parse::<u64>() {
+                        println!("ID: {id}"); todo!()
+                    } else {
+                        log!("ERROR: <ID> must be a valid integer");
+                        return Err(-1);
+                    }
+                }
+                "r" | "-r" | "request" | "--request" => { 
+                    let addr = next_arg()?;
+                    println!("ADDR: {addr}"); todo!()
+                }
+                "a" | "-a" | "accept"  | "--accept"  => { 
+                    if let Ok(id) = next_arg()?.parse::<u64>() {
+                        println!("ID: {id}"); todo!()
+                    } else {
+                        log!("ERROR: <ID> must be a valid integer");
+                        return Err(-1);
+                    }
+                }
                 subcommand => {
                     log!("ERROR: '{subcommand}' is not a recognized subcommand for {command}, see `{prog_path} help` for usage info");
                     return Err(-1);
                 }
             }
         }
-        "msg"  | "msgs"  | "message"    | "messages"    => { todo!() }
+        "msg"  | "msgs"  | "message"    | "messages"    => { 
+            match next_arg()?.as_str() {
+                "l" | "-l" | "list" | "--list" => { todo!() }
+                "s" | "-s" | "send" | "--send" => { 
+                    let msg = next_arg()?;
+                    println!("MSG: {msg}"); todo!()
+                }
+                "b" | "-b" | "bulk" | "--bulk" => { 
+                    let msgs = next_arg()?;
+                    println!("MSGS: {msgs}"); todo!()
+                }
+                subcommand => {
+                    log!("ERROR: '{subcommand}' is not a recognized subcommand for {command}, see `{prog_path} help` for usage info");
+                    return Err(-1);
+                }
+            }
+        }
         "help" | "-h"    | "--help"                     => { 
             println!("Usage: {prog_path} [conn | conns | connection | connections] [l | -l | list    | --list   ]");
-            print!("{}", " ".repeat(50 + prog_path.len()));              println!("[s | -s | select  | --select ]");
-            print!("{}", " ".repeat(50 + prog_path.len()));              println!("[r | -r | request | --request]");
-            print!("{}", " ".repeat(50 + prog_path.len()));              println!("[a | -a | accept  | --accept ]");
-            println!("       {prog_path} [msg  | msgs  | message    | messages   ]");
+            print!("{}", " ".repeat(50 + prog_path.len()));              println!("[s | -s | select  | --select ] <ID>");
+            print!("{}", " ".repeat(50 + prog_path.len()));              println!("[r | -r | request | --request] <ADDR>");
+            print!("{}", " ".repeat(50 + prog_path.len()));              println!("[a | -a | accept  | --accept ] <ID>");
+            println!();
+            println!("       {prog_path} [msg  | msgs  | message    | messages   ] [l | -l | list  | --list ]");
+            print!("{}", " ".repeat(50 + prog_path.len()));              println!("[s | -s | send  | --send ] <MSG>");
+            print!("{}", " ".repeat(50 + prog_path.len()));              println!("[b | -b | bulk  | --bulk ] <MSGS>");
+            println!();
             println!("       {prog_path} [help | -h    | --help   ]");
             println!("       └─▸ Print this message and exit.");
         }
