@@ -43,7 +43,12 @@ macro_rules! log {
 
 fn main() -> Result<(), isize> {
     
-    bindings::print_hello();
+    let conns = bindings::list_connections();
+    for conn in conns {
+        println!("{:#?}", conn);
+        println!("peer_name: {:?}", conn.get_peer_name());
+        println!("peer_addr: {:?}", conn.get_peer_addr());
+    }
 
     let mut args = env::args();
     let prog_path = args.next().expect("ARGS CANNOT BE EMPTY");
