@@ -5,6 +5,7 @@ use std::{slice, str};
 extern "C" {
     fn ap2p_strlen(s: *const u8) -> usize;
     fn ap2p_list_connections(buf: *const Connection, buf_len: &i32) -> i32;
+    fn ap2p_list_messages(buf: *const Message, buf_len: &i32) -> i32;
 }
 
 #[repr(C)]
@@ -34,6 +35,41 @@ pub fn list_connections(max: i32) -> Result<Vec<Connection>, ()> {
     
     unsafe { 
         if ap2p_list_connections(buf.as_ptr(), &buf_len)!=0 {
+            return Err(());
+        }
+        buf.set_len(buf_len as usize);
+    }
+    
+    return Ok(buf);
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct Message {
+    msg_id: u64,
+    conn_id: u64,
+    time_sent: u64,
+    time_recieved: u64,
+    content_type: u8,
+    content_len: u64,
+    content: *const u8,
+}
+impl Message {
+    pub fn get_content(&self) -> Vec<u8> {
+        let content;
+        unsafe {
+            content = slice::from_raw_parts(self.content, self.content_len as usize).to_vec();
+        }
+        return content;
+    }
+}
+
+pub fn list_messages(max: i32) -> Result<Vec<Message>, ()> {
+    let buf_len: i32 = max;
+    let mut buf = Vec::with_capacity(buf_len as usize);
+    
+    unsafe { 
+        if ap2p_list_messages(buf.as_ptr(), &buf_len)!=0 {
             return Err(());
         }
         buf.set_len(buf_len as usize);

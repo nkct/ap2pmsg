@@ -95,7 +95,15 @@ fn main() -> Result<(), isize> {
         }
         "msg"  | "msgs"  | "message"    | "messages"    => { 
             match next_arg()?.as_str() {
-                "l" | "-l" | "list" | "--list" => { todo!("listing messages") }
+                "l" | "-l" | "list" | "--list" => { 
+                    let msgs = bindings::list_messages(5).expect("could not list msgs");
+                    
+                    println!("msgs_count: {}", msgs.len());
+                    for msg in msgs {
+                        println!("{:#?}", msg);
+                        println!("content: {:#?}", msg.get_content());
+                    }
+                }
                 "s" | "-s" | "send" | "--send" => { 
                     let msg = next_arg()?;
                     println!("MSG: {msg}"); todo!("sending a message")
