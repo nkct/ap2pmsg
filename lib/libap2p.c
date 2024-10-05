@@ -5,6 +5,7 @@
 #include <sqlite3.h>
 
 #define ERROR "\x1b[31mERROR\x1b[0m"
+#define INFO  "\x1b[34mINFO\x1b[0m"
 
 unsigned long ap2p_strlen(const char* s) {
     return strlen(s);
@@ -20,9 +21,31 @@ typedef struct Connection {
     unsigned long time_established;
 } Connection;
 
+int create_conn_table(sqlite3* db) {
+    printf(INFO": creating Connections table\n");
+    
+    char* errmsg = 0;
+    const char* create_conns_sql = ""
+    "CREATE TABLE Connections ("
+        "connection_id INTEGER, "
+        "peer_id INTEGER NOT NULL UNIQUE, "
+        "self_id INTEGER NOT NULL, "
+        "peer_name TEXT NOT NULL, "
+        "peer_addr TEXT NOT NULL, "
+        "online INTEGER DEFAULT 1, "
+        "time_established INTEGER DEFAULT unixepoch NOT NULL,"
+        "PRIMARY KEY (connection_id)"
+    ");";
+    if ( sqlite3_exec(db, create_conns_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
+        printf(ERROR": could not create the Connections table; %s\n", errmsg);
+        sqlite3_free(errmsg);
+        return -1;
+    }
+    return 0;
+}
+
 int ap2p_list_connections(Connection* buf, int* buf_len) {
     sqlite3 *db;
-    char* errmsg = 0;
     
     if ( sqlite3_open("ap2p_storage.db", &db) ) {
         printf(ERROR": could not open database\n");
@@ -30,8 +53,16 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
     }
     
     sqlite3_stmt *conn_stmt;
-    if ( sqlite3_prepare_v2(db, "SELECT * FROM Connections", -1, &conn_stmt, NULL) != SQLITE_OK ) {
-        printf(ERROR": could not SELECT * FROM Connections; %s\n", sqlite3_errmsg(db));
+    while ( sqlite3_prepare_v2(db, "SELECT * FROM Connections", -1, &conn_stmt, NULL) != SQLITE_OK ) {
+        if ( strncmp(sqlite3_errmsg(db), "no such table", 14) != 0 ) {
+            if ( create_conn_table(db) != SQLITE_OK ) {
+                sqlite3_close(db);
+                return -1;
+            } else {
+                continue;
+            }
+        }
+        printf(ERROR": could not SELECT * FROM Connections; %s (%d)\n", sqlite3_errmsg(db), sqlite3_errcode(db));
         sqlite3_close(db);
         return -1;
     }
@@ -64,7 +95,7 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
     }
     sqlite3_finalize(conn_stmt);
     *buf_len = row_count;
-   
+    
     sqlite3_close(db);
     return 0;
 }

@@ -59,6 +59,8 @@ fn main() -> Result<(), isize> {
             match next_arg()?.as_str() {
                 "l" | "-l" | "list"    | "--list"    => { 
                     let conns = bindings::list_connections(5).expect("could not list conns");
+                    
+                    println!("conn_count: {}", conns.len());
                     for conn in conns {
                         println!("{:#?}", conn);
                         println!("peer_name: {:?}", conn.get_peer_name());
