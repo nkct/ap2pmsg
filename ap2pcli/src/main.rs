@@ -43,7 +43,7 @@ macro_rules! log {
 
 fn main() -> Result<(), isize> {
     
-    let conns = bindings::list_connections();
+    let conns = bindings::list_connections().expect("could not list conns");
     for conn in conns {
         println!("{:#?}", conn);
         println!("peer_name: {:?}", conn.get_peer_name());

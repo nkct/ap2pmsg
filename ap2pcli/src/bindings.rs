@@ -1,9 +1,10 @@
 use std::{slice, str};
 
 #[link(name = "ap2p")]
+#[link(name = "sqlite3")]
 extern "C" {
     fn ap2p_strlen(s: *const u8) -> usize;
-    fn ap2p_list_connections(buf: *const Connection, buf_len: &i32);
+    fn ap2p_list_connections(buf: *const Connection, buf_len: &i32) -> i32;
 }
 
 #[repr(C)]
@@ -25,14 +26,16 @@ impl Connection {
     }
 }
 
-pub fn list_connections() -> Vec<Connection> {
+pub fn list_connections() -> Result<Vec<Connection>, ()> {
     let buf_len: i32 = 1;
     let mut buf = Vec::with_capacity(buf_len as usize);
     
     unsafe { 
-        ap2p_list_connections(buf.as_ptr(), &buf_len); 
+        if ap2p_list_connections(buf.as_ptr(), &buf_len)!=0 {
+            return Err(());
+        }
         buf.set_len(buf_len as usize);
     }
     
-    return buf;
+    return Ok(buf);
 }
