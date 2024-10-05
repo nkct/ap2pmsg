@@ -86,7 +86,7 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
     }
     
     sqlite3_stmt *conn_stmt;
-    while ( sqlite3_prepare_v2(db, "SELECT * FROM Connections", -1, &conn_stmt, NULL) != SQLITE_OK ) {
+    while ( sqlite3_prepare_v2(db, "SELECT * FROM Connections;", -1, &conn_stmt, NULL) != SQLITE_OK ) {
         if ( strncmp(sqlite3_errmsg(db), "no such table", 14) != 0 ) {
             if ( create_conn_table(db) != SQLITE_OK ) {
                 sqlite3_close(db);
@@ -142,7 +142,7 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
     }
     
     sqlite3_stmt *msg_stmt;
-    while ( sqlite3_prepare_v2(db, "SELECT * FROM Messages", -1, &msg_stmt, NULL) != SQLITE_OK ) {
+    while ( sqlite3_prepare_v2(db, "SELECT * FROM Messages;", -1, &msg_stmt, NULL) != SQLITE_OK ) {
         if ( strncmp(sqlite3_errmsg(db), "no such table", 14) != 0 ) {
             if ( create_msg_table(db) != SQLITE_OK ) {
                 sqlite3_close(db);
@@ -159,9 +159,9 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
     int res;
     int row_count = 0;
     while ( (res = sqlite3_step(msg_stmt)) == SQLITE_ROW ) {
-        unsigned long content_len = sqlite3_column_bytes(msg_stmt, 6);
+        unsigned long content_len = sqlite3_column_bytes(msg_stmt, 5);
         unsigned char* content = sqlite3_malloc(content_len);
-        memcpy(content, sqlite3_column_blob(msg_stmt, 6), content_len);
+        memcpy(content, sqlite3_column_blob(msg_stmt, 5), content_len);
         
         Message msg = {
             .msg_id        = sqlite3_column_int64(msg_stmt, 0),
@@ -170,7 +170,7 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
             .time_recieved = sqlite3_column_int64(msg_stmt, 3),
             .content_type  =   sqlite3_column_int(msg_stmt, 4),
             .content_len   = content_len,
-            .content       =  sqlite3_column_blob(msg_stmt, 5),
+            .content       = content,
         };
         buf[row_count] = msg;
         row_count += 1;

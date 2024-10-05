@@ -101,7 +101,7 @@ fn main() -> Result<(), isize> {
                     println!("msgs_count: {}", msgs.len());
                     for msg in msgs {
                         println!("{:#?}", msg);
-                        println!("content: {:#?}", msg.get_content());
+                        println!("content: {:?}", msg.get_content());
                     }
                 }
                 "s" | "-s" | "send" | "--send" => { 
