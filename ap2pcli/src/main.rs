@@ -42,14 +42,6 @@ macro_rules! log {
 
 
 fn main() -> Result<(), isize> {
-    
-    let conns = bindings::list_connections().expect("could not list conns");
-    for conn in conns {
-        println!("{:#?}", conn);
-        println!("peer_name: {:?}", conn.get_peer_name());
-        println!("peer_addr: {:?}", conn.get_peer_addr());
-    }
-
     let mut args = env::args();
     let prog_path = args.next().expect("ARGS CANNOT BE EMPTY");
     let mut next_arg = || -> Result<String, isize> {
@@ -65,7 +57,14 @@ fn main() -> Result<(), isize> {
     match command.as_str() {
         "conn" | "conns" | "connection" | "connections" => { 
             match next_arg()?.as_str() {
-                "l" | "-l" | "list"    | "--list"    => { todo!("listing connections") }
+                "l" | "-l" | "list"    | "--list"    => { 
+                    let conns = bindings::list_connections(5).expect("could not list conns");
+                    for conn in conns {
+                        println!("{:#?}", conn);
+                        println!("peer_name: {:?}", conn.get_peer_name());
+                        println!("peer_addr: {:?}", conn.get_peer_addr());
+                    }
+                }
                 "s" | "-s" | "select"  | "--select"  => { 
                     if let Ok(id) = next_arg()?.parse::<u64>() {
                         println!("ID: {id}"); todo!("selecting a connection")

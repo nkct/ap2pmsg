@@ -10,8 +10,10 @@ extern "C" {
 #[repr(C)]
 #[derive(Debug)]
 pub struct Connection {
+    conn_id: u64,
     peer_id: u64,
     self_id: u64,
+    // check if these raw ptrs need manual freeing
     peer_name: *const u8,
     peer_addr: *const u8,
     online: bool,
@@ -26,8 +28,8 @@ impl Connection {
     }
 }
 
-pub fn list_connections() -> Result<Vec<Connection>, ()> {
-    let buf_len: i32 = 1;
+pub fn list_connections(max: i32) -> Result<Vec<Connection>, ()> {
+    let buf_len: i32 = max;
     let mut buf = Vec::with_capacity(buf_len as usize);
     
     unsafe { 
