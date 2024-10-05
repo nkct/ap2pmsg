@@ -11,14 +11,16 @@ extern "C" {
 #[repr(C)]
 #[derive(Debug)]
 pub struct Connection {
-    conn_id: u64,
-    peer_id: u64,
-    self_id: u64,
+    conn_id: i64,
+    peer_id: i64,
+    self_id: i64,
     // check if these raw ptrs need manual freeing
     peer_name: *const u8,
     peer_addr: *const u8,
     online: bool,
-    time_established: u64,
+    requested_at: i64,
+    resolved_at: i64,
+    status: i8,
 }
 impl Connection {
     pub fn get_peer_name(&self) -> &str {
@@ -46,12 +48,12 @@ pub fn list_connections(max: i32) -> Result<Vec<Connection>, ()> {
 #[repr(C)]
 #[derive(Debug)]
 pub struct Message {
-    msg_id: u64,
-    conn_id: u64,
-    time_sent: u64,
-    time_recieved: u64,
+    msg_id: i64,
+    conn_id: i64,
+    time_sent: i64,
+    time_recieved: i64,
     content_type: u8,
-    content_len: u64,
+    content_len: i32,
     content: *const u8,
 }
 impl Message {

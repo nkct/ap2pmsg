@@ -19,11 +19,13 @@ int create_conn_table(sqlite3* db) {
     "CREATE TABLE Connections ("
         "conn_id INTEGER, "
         "peer_id INTEGER NOT NULL UNIQUE, "
-        "self_id INTEGER NOT NULL, "
+        "self_id INTEGER, "
         "peer_name TEXT NOT NULL, "
         "peer_addr TEXT NOT NULL, "
         "online INTEGER DEFAULT 1, "
-        "time_established INTEGER DEFAULT unixepoch NOT NULL, "
+        "requested_at INTEGER DEFAULT unixepoch NOT NULL, "
+        "resolved_at INTEGER, "
+        "status INTEGER, "
         "PRIMARY KEY (conn_id)"
     ");";
     if ( sqlite3_exec(db, create_conns_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
@@ -33,6 +35,18 @@ int create_conn_table(sqlite3* db) {
     }
     return 0;
 }
+
+typedef struct Connection {
+    long conn_id;
+    long peer_id;
+    long self_id;
+    const char* peer_name;
+    const char* peer_addr;
+    bool online;
+    long requested_at;
+    long resolved_at;
+    char status;
+} Connection;
 
 int create_msg_table(sqlite3* db) {
     printf(INFO": creating Messages table\n");
@@ -57,26 +71,17 @@ int create_msg_table(sqlite3* db) {
     return 0;
 }
 
-typedef struct Connection {
-    unsigned long conn_id;
-    unsigned long peer_id;
-    unsigned long self_id;
-    const char* peer_name;
-    const char* peer_addr;
-    bool online;
-    unsigned long time_established;
-} Connection;
-
 typedef struct Message {
-    unsigned long msg_id;
-    unsigned long conn_id;
-    unsigned long time_sent;
-    unsigned long time_recieved;
+    long msg_id;
+    long conn_id;
+    long time_sent;
+    long time_recieved;
     unsigned char content_type;
-    unsigned long content_len;
+    int content_len;
     const unsigned char* content;
 } Message;
 
+// negative on error
 int ap2p_list_connections(Connection* buf, int* buf_len) {
     sqlite3 *db;
     
@@ -110,13 +115,15 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
         sprintf(peer_addr, "%s", sqlite3_column_text(conn_stmt, 4));
         
         Connection conn = {
-            .conn_id    = sqlite3_column_int64(conn_stmt, 0),
-            .peer_id          = sqlite3_column_int64(conn_stmt, 1),
-            .self_id          = sqlite3_column_int64(conn_stmt, 2),
-            .peer_name        =  peer_name,
-            .peer_addr        =  peer_addr,
-            .online           =   sqlite3_column_int(conn_stmt, 5),
-            .time_established = sqlite3_column_int64(conn_stmt, 6)
+            .conn_id      = sqlite3_column_int64(conn_stmt, 0),
+            .peer_id      = sqlite3_column_int64(conn_stmt, 1),
+            .self_id      = sqlite3_column_int64(conn_stmt, 2),
+            .peer_name    = peer_name,
+            .peer_addr    = peer_addr,
+            .online       =   sqlite3_column_int(conn_stmt, 5),
+            .requested_at = sqlite3_column_int64(conn_stmt, 6),
+            .resolved_at  = sqlite3_column_int64(conn_stmt, 7),
+            .status       =   sqlite3_column_int(conn_stmt, 8),
         };
         buf[row_count] = conn;
         row_count += 1;
@@ -133,6 +140,7 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
     return 0;
 }
 
+// negative on error
 int ap2p_list_messages(Message* buf, int* buf_len) {
     sqlite3 *db;
     
