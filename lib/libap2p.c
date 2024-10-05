@@ -17,14 +17,14 @@ int create_conn_table(sqlite3* db) {
     char* errmsg = 0;
     const char* create_conns_sql = ""
     "CREATE TABLE Connections ("
-        "connection_id INTEGER, "
+        "conn_id INTEGER, "
         "peer_id INTEGER NOT NULL UNIQUE, "
         "self_id INTEGER NOT NULL, "
         "peer_name TEXT NOT NULL, "
         "peer_addr TEXT NOT NULL, "
         "online INTEGER DEFAULT 1, "
         "time_established INTEGER DEFAULT unixepoch NOT NULL, "
-        "PRIMARY KEY (connection_id)"
+        "PRIMARY KEY (conn_id)"
     ");";
     if ( sqlite3_exec(db, create_conns_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
         printf(ERROR": could not create the Connections table; %s\n", errmsg);
@@ -40,14 +40,14 @@ int create_msg_table(sqlite3* db) {
     char* errmsg = 0;
     const char* create_msgs_sql = ""
     "CREATE TABLE Messages ("
-        "message_id INTEGER, "
-        "connection_id INTEGER, "
+        "msg_id INTEGER, "
+        "conn_id INTEGER, "
         "time_sent INTEGER DEFAULT unixepoch, "
         "time_recieved INTEGER, "
         "content_type INTEGER NOT NULL, "
         "content BLOB, "
-        "PRIMARY KEY (message_id), "
-        "FOREIGN KEY (connection_id) REFERENCES Connections(connection_id)"
+        "PRIMARY KEY (msg_id), "
+        "FOREIGN KEY (connection_id) REFERENCES Connections(conn_id)"
     ");";
     if ( sqlite3_exec(db, create_msgs_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
         printf(ERROR": could not create the Messages table; %s\n", errmsg);
