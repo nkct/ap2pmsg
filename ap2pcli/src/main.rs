@@ -77,7 +77,9 @@ fn main() -> Result<(), isize> {
                 }
                 "r" | "-r" | "request" | "--request" => { 
                     let addr = next_arg()?;
-                    println!("ADDR: {addr}"); todo!("requesting a connection")
+                    println!("ADDR: {addr}"); 
+                    let res = bindings::request_connection(&addr);
+                    println!("request_connection result: {res}"); 
                 }
                 "a" | "-a" | "accept"  | "--accept"  => { 
                     if let Ok(id) = next_arg()?.parse::<u64>() {

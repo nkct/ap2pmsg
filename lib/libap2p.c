@@ -7,6 +7,14 @@
 #define ERROR "\x1b[31mERROR\x1b[0m"
 #define INFO  "\x1b[34mINFO\x1b[0m"
 
+#define DB_FILE "ap2p_storage.db"
+
+#define CONN_STATUS_REJECTED -1
+#define CONN_STATUS_ACCEPTED 0
+#define CONN_STATUS_PENDING 1
+
+#define startswith(str, pat) strncmp((str), (pat), strlen((pat)))
+
 unsigned long ap2p_strlen(const char* s) {
     return strlen(s);
 }
@@ -17,16 +25,15 @@ int create_conn_table(sqlite3* db) {
     char* errmsg = 0;
     const char* create_conns_sql = ""
     "CREATE TABLE Connections ("
-        "conn_id INTEGER, "
+        "conn_id INTEGER PRIMARY KEY, "
         "peer_id INTEGER NOT NULL UNIQUE, "
         "self_id INTEGER, "
-        "peer_name TEXT NOT NULL, "
+        "peer_name TEXT, "
         "peer_addr TEXT NOT NULL, "
-        "online INTEGER DEFAULT 1, "
+        "online INTEGER DEFAULT 0, "
         "requested_at INTEGER DEFAULT unixepoch NOT NULL, "
         "resolved_at INTEGER, "
-        "status INTEGER, "
-        "PRIMARY KEY (conn_id)"
+        "status INTEGER DEFAULT 1 NOT NULL"
     ");";
     if ( sqlite3_exec(db, create_conns_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
         printf(ERROR": could not create the Connections table; %s\n", errmsg);
@@ -36,6 +43,8 @@ int create_conn_table(sqlite3* db) {
     return 0;
 }
 
+// self_id, peer_name and resolved_at of a pending conn are undefined
+// self_id and peer_name of a rejected conn are undefined
 typedef struct Connection {
     long conn_id;
     long peer_id;
@@ -45,7 +54,7 @@ typedef struct Connection {
     bool online;
     long requested_at;
     long resolved_at;
-    char status;
+    char status; // negative on rejected, zero on accepted, positive on pending
 } Connection;
 
 int create_msg_table(sqlite3* db) {
@@ -54,14 +63,13 @@ int create_msg_table(sqlite3* db) {
     char* errmsg = 0;
     const char* create_msgs_sql = ""
     "CREATE TABLE Messages ("
-        "msg_id INTEGER, "
+        "msg_id INTEGER PRIMARY KEY, "
         "conn_id INTEGER, "
         "time_sent INTEGER DEFAULT unixepoch, "
         "time_recieved INTEGER, "
         "content_type INTEGER NOT NULL, "
         "content BLOB, "
-        "PRIMARY KEY (msg_id), "
-        "FOREIGN KEY (connection_id) REFERENCES Connections(conn_id)"
+        "FOREIGN KEY (conn_id) REFERENCES Connections(conn_id)"
     ");";
     if ( sqlite3_exec(db, create_msgs_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
         printf(ERROR": could not create the Messages table; %s\n", errmsg);
@@ -81,18 +89,18 @@ typedef struct Message {
     const unsigned char* content;
 } Message;
 
-// negative on error
+// non-zero on error
 int ap2p_list_connections(Connection* buf, int* buf_len) {
     sqlite3 *db;
     
-    if ( sqlite3_open("ap2p_storage.db", &db) ) {
+    if ( sqlite3_open(DB_FILE, &db) ) {
         printf(ERROR": could not open database\n");
         return -1;
     }
     
     sqlite3_stmt *conn_stmt;
     while ( sqlite3_prepare_v2(db, "SELECT * FROM Connections;", -1, &conn_stmt, NULL) != SQLITE_OK ) {
-        if ( strncmp(sqlite3_errmsg(db), "no such table", 14) != 0 ) {
+        if ( startswith(sqlite3_errmsg(db), "no such table") == 0 ) {
             if ( create_conn_table(db) != SQLITE_OK ) {
                 sqlite3_close(db);
                 return -1;
@@ -108,8 +116,15 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
     int res;
     int row_count = 0;
     while ( (res = sqlite3_step(conn_stmt)) == SQLITE_ROW ) {
-        char* peer_name = sqlite3_malloc(sqlite3_column_bytes(conn_stmt, 3));
-        sprintf(peer_name, "%s", sqlite3_column_text(conn_stmt, 3));
+        int status = sqlite3_column_int(conn_stmt, 8);
+        
+        char* peer_name;
+        if ( status==CONN_STATUS_ACCEPTED ) {
+            peer_name = sqlite3_malloc(sqlite3_column_bytes(conn_stmt, 3));
+            sprintf(peer_name, "%s", sqlite3_column_text(conn_stmt, 3));
+        } else {
+            peer_name = NULL;
+        }
         
         char* peer_addr = sqlite3_malloc(sqlite3_column_bytes(conn_stmt, 4));
         sprintf(peer_addr, "%s", sqlite3_column_text(conn_stmt, 4));
@@ -123,7 +138,7 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
             .online       =   sqlite3_column_int(conn_stmt, 5),
             .requested_at = sqlite3_column_int64(conn_stmt, 6),
             .resolved_at  = sqlite3_column_int64(conn_stmt, 7),
-            .status       =   sqlite3_column_int(conn_stmt, 8),
+            .status       = status,
         };
         buf[row_count] = conn;
         row_count += 1;
@@ -140,18 +155,18 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
     return 0;
 }
 
-// negative on error
+// non-zero on error
 int ap2p_list_messages(Message* buf, int* buf_len) {
     sqlite3 *db;
     
-    if ( sqlite3_open("ap2p_storage.db", &db) ) {
+    if ( sqlite3_open(DB_FILE, &db) ) {
         printf(ERROR": could not open database\n");
         return -1;
     }
     
     sqlite3_stmt *msg_stmt;
     while ( sqlite3_prepare_v2(db, "SELECT * FROM Messages;", -1, &msg_stmt, NULL) != SQLITE_OK ) {
-        if ( strncmp(sqlite3_errmsg(db), "no such table", 14) != 0 ) {
+        if ( startswith(sqlite3_errmsg(db), "no such table") == 0 ) {
             if ( create_msg_table(db) != SQLITE_OK ) {
                 sqlite3_close(db);
                 return -1;
@@ -193,4 +208,60 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
     
     sqlite3_close(db);
     return 0;
+}
+
+// negative on error
+// zero on succes
+// positive on pending
+int ap2p_request_connection(char* peer_addr) {
+    long peer_id = random();
+    
+    Connection conn = {
+        .peer_id   = peer_id,
+        .peer_addr = peer_addr,
+    };
+    
+    sqlite3 *db;
+    if ( sqlite3_open(DB_FILE, &db) ) {
+        printf(ERROR": could not open database\n");
+        return -1;
+    }
+    
+    sqlite3_stmt *insert_stmt;
+    const char* insert_sql = "INSERT INTO Connections (peer_id, peer_addr) VALUES (?, ?);";
+    while ( sqlite3_prepare_v2(db, insert_sql, -1, &insert_stmt, NULL) != SQLITE_OK ) {
+        if ( startswith(sqlite3_errmsg(db), "no such table") == 0 ) {
+            if ( create_conn_table(db) != SQLITE_OK ) {
+                sqlite3_close(db);
+                return -1;
+            } else {
+                continue;
+            }
+        }
+        printf(ERROR": could not INSERT INTO Connections; %s (%d)\n", sqlite3_errmsg(db), sqlite3_errcode(db));
+        sqlite3_close(db);
+        return -1;
+    }
+    
+    int res;
+    if ( (res = sqlite3_bind_int64(insert_stmt, 1, conn.peer_id)) != SQLITE_OK ) {
+        printf(ERROR": failed to bind peer_id with code: (%d)\n", res);
+        sqlite3_close(db);
+        return -1;
+    }
+     if ( (res = sqlite3_bind_text(insert_stmt, 2, conn.peer_addr, strlen(conn.peer_addr), SQLITE_STATIC)) != SQLITE_OK ) {
+        printf(ERROR": failed to bind peer_addr with code: (%d)\n", res);
+        sqlite3_close(db);
+        return -1;
+     }
+    
+    if ( (res = sqlite3_step(insert_stmt)) != SQLITE_DONE ) {
+        printf(ERROR": failed while iterating insert result; with code %d\n", res);
+        sqlite3_close(db);
+        return -1;
+    }
+    sqlite3_finalize(insert_stmt);
+    
+    sqlite3_close(db);
+    return 1;
 }
