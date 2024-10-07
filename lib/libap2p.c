@@ -1,10 +1,15 @@
+#include <time.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h> 
 #include <sqlite3.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #define ERROR "\x1b[31mERROR\x1b[0m"
+#define WARN "\x1b[33mWARN\x1b[0m"
 #define INFO  "\x1b[34mINFO\x1b[0m"
 
 #define DB_FILE "ap2p_storage.db"
@@ -12,6 +17,11 @@
 #define CONN_STATUS_REJECTED -1
 #define CONN_STATUS_ACCEPTED 0
 #define CONN_STATUS_PENDING 1
+
+#define DEFAULT_PORT 7676
+
+/* Reverse the byte order of an unsigned short. */
+#define revbo_u16(d) ( ((d&0xff)<<8)|(d>>8) )
 
 #define startswith(str, pat) strncmp((str), (pat), strlen((pat)))
 
@@ -199,7 +209,7 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
         row_count += 1;
     }
     if ( res != SQLITE_DONE ) {
-        printf(ERROR": failed while iterating conn result; with code %d\n", res);
+        printf(ERROR": failed while executing select; with code %d\n", res);
         sqlite3_close(db);
         return -1;
     }
@@ -214,6 +224,7 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
 // zero on succes
 // positive on pending
 int ap2p_request_connection(char* peer_addr) {
+    srandom(time(NULL));
     long peer_id = random();
     
     Connection conn = {
@@ -221,47 +232,70 @@ int ap2p_request_connection(char* peer_addr) {
         .peer_addr = peer_addr,
     };
     
-    sqlite3 *db;
-    if ( sqlite3_open(DB_FILE, &db) ) {
-        printf(ERROR": could not open database\n");
-        return -1;
-    }
     
-    sqlite3_stmt *insert_stmt;
-    const char* insert_sql = "INSERT INTO Connections (peer_id, peer_addr) VALUES (?, ?);";
-    while ( sqlite3_prepare_v2(db, insert_sql, -1, &insert_stmt, NULL) != SQLITE_OK ) {
-        if ( startswith(sqlite3_errmsg(db), "no such table") == 0 ) {
-            if ( create_conn_table(db) != SQLITE_OK ) {
-                sqlite3_close(db);
-                return -1;
-            } else {
-                continue;
-            }
+    { // insert the conn into the db
+        sqlite3 *db;
+        if ( sqlite3_open(DB_FILE, &db) ) {
+            printf(ERROR": could not open database\n");
+            return -1;
         }
-        printf(ERROR": could not INSERT INTO Connections; %s (%d)\n", sqlite3_errmsg(db), sqlite3_errcode(db));
+        
+        sqlite3_stmt *insert_stmt;
+        const char* insert_sql = "INSERT INTO Connections (peer_id, peer_addr) VALUES (?, ?);";
+        while ( sqlite3_prepare_v2(db, insert_sql, -1, &insert_stmt, NULL) != SQLITE_OK ) {
+            if ( startswith(sqlite3_errmsg(db), "no such table") == 0 ) {
+                if ( create_conn_table(db) != SQLITE_OK ) {
+                    sqlite3_close(db);
+                    return -1;
+                } else {
+                    continue;
+                }
+            }
+            printf(ERROR": could not INSERT INTO Connections; %s (%d)\n", sqlite3_errmsg(db), sqlite3_errcode(db));
+            sqlite3_close(db);
+            return -1;
+        }
+        
+        int res;
+        if ( (res = sqlite3_bind_int64(insert_stmt, 1, conn.peer_id)) != SQLITE_OK ) {
+            printf(ERROR": failed to bind peer_id with code: (%d)\n", res);
+            sqlite3_close(db);
+            return -1;
+        }
+        if ( (res = sqlite3_bind_text(insert_stmt, 2, conn.peer_addr, strlen(conn.peer_addr), SQLITE_STATIC)) != SQLITE_OK ) {
+            printf(ERROR": failed to bind peer_addr with code: (%d)\n", res);
+            sqlite3_close(db);
+            return -1;
+        }
+        
+        if ( (res = sqlite3_step(insert_stmt)) != SQLITE_DONE ) {
+            printf(ERROR": failed while executing insert; with code %d\n", res);
+            sqlite3_close(db);
+            return -1;
+        }
+        sqlite3_finalize(insert_stmt);
         sqlite3_close(db);
-        return -1;
-    }
+    } // end inserting the conn into the db
     
-    int res;
-    if ( (res = sqlite3_bind_int64(insert_stmt, 1, conn.peer_id)) != SQLITE_OK ) {
-        printf(ERROR": failed to bind peer_id with code: (%d)\n", res);
-        sqlite3_close(db);
-        return -1;
-    }
-     if ( (res = sqlite3_bind_text(insert_stmt, 2, conn.peer_addr, strlen(conn.peer_addr), SQLITE_STATIC)) != SQLITE_OK ) {
-        printf(ERROR": failed to bind peer_addr with code: (%d)\n", res);
-        sqlite3_close(db);
-        return -1;
-     }
+    { // attempt to communicate the conn to the peer
+        int peer_sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (peer_sock < 0) {
+            printf(ERROR": peer socket creation failed\n");
+            return -1;
+        }
     
-    if ( (res = sqlite3_step(insert_stmt)) != SQLITE_DONE ) {
-        printf(ERROR": failed while iterating insert result; with code %d\n", res);
-        sqlite3_close(db);
-        return -1;
-    }
-    sqlite3_finalize(insert_stmt);
+        struct sockaddr_in peer_addr = {
+            .sin_family = AF_INET,
+            .sin_addr.s_addr = inet_addr(conn.peer_addr),
+            .sin_port = revbo_u16(DEFAULT_PORT),
+        };
+        if ( connect(peer_sock, (struct sockaddr*)&peer_addr, sizeof(peer_addr)) != 0 ) {
+            printf(WARN": could not connect to peer at %s; conn is pending\n", conn.peer_addr);
+            return 1;
+        }
     
-    sqlite3_close(db);
+        close(peer_sock);
+    } // end attempt to communicate the conn to the peer
+    
     return 1;
 }
