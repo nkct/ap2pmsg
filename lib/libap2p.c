@@ -1,5 +1,7 @@
 #include <time.h>
+#include <errno.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h> 
@@ -11,6 +13,7 @@
 #define ERROR "\x1b[31mERROR\x1b[0m"
 #define WARN "\x1b[33mWARN\x1b[0m"
 #define INFO  "\x1b[34mINFO\x1b[0m"
+#define DEBUG  "\x1b[36mDEBUG\x1b[0m"
 
 #define DB_FILE "ap2p_storage.db"
 
@@ -293,6 +296,29 @@ int ap2p_request_connection(char* peer_addr) {
             printf(WARN": could not connect to peer at %s; conn is pending\n", conn.peer_addr);
             return 1;
         }
+        printf(INFO": connected to peer at %s\n", conn.peer_addr);
+        
+        const char* msg = "Hello from ap2p!";
+        if ( send(peer_sock, msg, strlen(msg), 0) < 0) {
+            printf(WARN": could not send msg to peer at %s; %s; conn is pending\n", conn.peer_addr, strerror(errno));
+            close(peer_sock);
+            return 1;
+        }
+        printf(DEBUG": sent '%s' to peer at %s\n", msg, conn.peer_addr);
+        
+        printf(INFO": awaiting response from peer at %s\n", conn.peer_addr);
+        #define MAX_RESP 2048
+        char* resp = malloc(MAX_RESP);
+        int resp_len;
+        if ( (resp_len = recv(peer_sock, resp, MAX_RESP, 0)) < 0 ) {
+            printf(WARN": could not recieve response from peer at %s; %s; conn is pending\n", conn.peer_addr, strerror(errno));
+            free(resp);
+            close(peer_sock);
+            return 1;
+        }
+        resp[resp_len] = '\0';
+        printf(DEBUG": recieved '%s' from peer at %s\n", resp, conn.peer_addr);
+        free(resp);
     
         close(peer_sock);
     } // end attempt to communicate the conn to the peer

@@ -1,3 +1,4 @@
 ap2pcli/target
 ap2pcli/*.db
 libap2p.a
+dummy_peer
