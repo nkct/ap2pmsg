@@ -23,6 +23,14 @@
 
 #define DEFAULT_PORT 7676
 
+#define MAX_HOST_NAME 64 // in bytes
+
+#define PARCEL_CONN_EST_KIND 1 // establish conn
+#define PARCEL_CONN_EST_LEN 73 // 1 + 8 + 64
+
+#define PARCEL_CONN_REJ_KIND 2 // reject conn establish attempt
+#define PARCEL_CONN_REJ_LEN  1 // just kind
+
 /* Reverse the byte order of an unsigned short. */
 #define revbo_u16(d) ( ((d&0xff)<<8)|(d>>8) )
 
@@ -280,6 +288,9 @@ int ap2p_request_connection(char* peer_addr) {
         sqlite3_close(db);
     } // end inserting the conn into the db
     
+    int conn_status = 1;
+    long self_id;
+    char* peer_name;
     { // attempt to communicate the conn to the peer
         int peer_sock = socket(AF_INET, SOCK_STREAM, 0);
         if (peer_sock < 0) {
@@ -298,30 +309,61 @@ int ap2p_request_connection(char* peer_addr) {
         }
         printf(INFO": connected to peer at %s\n", conn.peer_addr);
         
-        const char* msg = "Hello from ap2p!";
-        if ( send(peer_sock, msg, strlen(msg), 0) < 0) {
-            printf(WARN": could not send msg to peer at %s; %s; conn is pending\n", conn.peer_addr, strerror(errno));
+        
+        const char* self_name = "the_pear_of_adam";
+        char parcel[PARCEL_CONN_EST_LEN] = {0};
+        {
+            parcel[0] = PARCEL_CONN_EST_KIND;
+            
+            for (int i=1;i<=4;i++) {
+                parcel[i] = (peer_id >> (8*(4-i))) & 0xFF;
+            }
+
+            strncpy(parcel+5, self_name, MAX_HOST_NAME);
+        }
+        if ( send(peer_sock, parcel, PARCEL_CONN_EST_LEN, 0) < 0) {
+            printf(WARN": could not send parcel to peer at %s; %s; conn is pending\n", conn.peer_addr, strerror(errno));
             close(peer_sock);
             return 1;
         }
-        printf(DEBUG": sent '%s' to peer at %s\n", msg, conn.peer_addr);
+        printf(DEBUG": sent establish conn parcel to peer at %s with [peer_id: %ld, self_name: '%s']\n", conn.peer_addr, peer_id, self_name);
         
         printf(INFO": awaiting response from peer at %s\n", conn.peer_addr);
-        #define MAX_RESP 2048
-        char* resp = malloc(MAX_RESP);
-        int resp_len;
-        if ( (resp_len = recv(peer_sock, resp, MAX_RESP, 0)) < 0 ) {
+        char resp_kind;
+        if ( recv(peer_sock, &resp_kind, 1, 0) < 1 ) {
             printf(WARN": could not recieve response from peer at %s; %s; conn is pending\n", conn.peer_addr, strerror(errno));
-            free(resp);
             close(peer_sock);
             return 1;
         }
-        resp[resp_len] = '\0';
-        printf(DEBUG": recieved '%s' from peer at %s\n", resp, conn.peer_addr);
-        free(resp);
-    
+        
+        if ( resp_kind == 1 ) { // acepted, kind=PARCEL_CONN_EST_KIND
+            char resp[PARCEL_CONN_EST_LEN-1];
+            if ( recv(peer_sock, &resp, PARCEL_CONN_EST_LEN-1, 0) < PARCEL_CONN_EST_LEN-1 ) {
+                printf(ERROR": could not read PARCEL_CONN_EST from peer at %s; %s \n", conn.peer_addr, strerror(errno));
+                close(peer_sock);
+                return -1;
+            }
+            conn_status = 0;
+            self_id = *(long*)(&resp);
+            peer_name = (char*)(&resp+4);
+            printf(INFO": peer at %s accepted conn request with [self_id: %ld, peer_name: %s]\n", conn.peer_addr, self_id, peer_name);
+            
+        } else if ( resp_kind == 2 ) { // rejected, kind=PARCEL_CONN_REJ_KIND
+            printf(INFO": peer at %s rejected conn request\n", conn.peer_addr);
+            conn_status = -1;
+        } else { // invalid
+            printf(WARN": invalid response kind from peer at %s; %s; conn is pending\n", conn.peer_addr, strerror(errno));
+            close(peer_sock);
+            return 1;
+        }
+         
         close(peer_sock);
+        return 0;
     } // end attempt to communicate the conn to the peer
+    
+    if (conn_status == 0 || conn_status == -1) { // update conn in db
+        
+    } // end update conn in db
     
     return 1;
 }
