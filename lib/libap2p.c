@@ -100,6 +100,34 @@ int create_msg_table(sqlite3* db) {
     return 0;
 }
 
+int create_state_table(sqlite3* db) {
+    printf(INFO": creating State table\n");
+    
+    char* errmsg = 0;
+    const char* create_state_sql = ""
+    "CREATE TABLE State ("
+        "pair_id INTEGER PRIMARY KEY, "
+        "key TEXT, "
+        "value TEXT"
+    ");";
+    if ( sqlite3_exec(db, create_state_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
+        printf(ERROR": could not create the State table; %s\n", errmsg);
+        sqlite3_free(errmsg);
+        return -1;
+    }
+    char* default_state_sql = ""
+    "INSERT INTO State (key, value) VALUES"
+        "('selected_conn', -1)"
+    ";";
+    if ( sqlite3_exec(db, default_state_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
+        printf(ERROR": could not insert dafaults into the State table; %s\n", errmsg);
+        sqlite3_free(errmsg);
+        return -1;
+    }
+    
+    return 0;
+}
+
 typedef struct Message {
     long msg_id;
     long conn_id;
@@ -304,7 +332,6 @@ int ap2p_request_connection(char* peer_addr) {
         }
         printf(INFO": connected to peer at %s\n", peer_addr);
         
-        
         const char* self_name = "the_pear_of_adam";
         char parcel[PARCEL_CONN_EST_LEN] = {0};
         {
@@ -398,4 +425,45 @@ int ap2p_request_connection(char* peer_addr) {
     } // end update conn in db
     
     return 1;
+}
+
+int ap2p_select_connection(long conn_id) {
+    sqlite3 *db;
+    if ( sqlite3_open(DB_FILE, &db) ) {
+        printf(ERROR": could not open database\n");
+        return -1;
+    }
+    
+    sqlite3_stmt *update_stmt;
+    const char* update_sql = "UPDATE State SET value=(?) WHERE key='selected_conn';";
+    while ( sqlite3_prepare_v2(db, update_sql, -1, &update_stmt, NULL) != SQLITE_OK ) {
+        if ( startswith(sqlite3_errmsg(db), "no such table") == 0 ) {
+            if ( create_state_table(db) != SQLITE_OK ) {
+                sqlite3_close(db);
+                return -1;
+            } else {
+                continue;
+            }
+        }
+        printf(ERROR": could not UPDATE State; %s (%d)\n", sqlite3_errmsg(db), sqlite3_errcode(db));
+        sqlite3_close(db);
+        return -1;
+    }
+    
+    int res;
+    if ( (res = sqlite3_bind_int64(update_stmt, 1, conn_id)) != SQLITE_OK ) {
+        printf(ERROR": failed to bind conn_id with code: (%d)\n", res);
+        sqlite3_close(db);
+        return -1;
+    }
+        
+    if ( (res = sqlite3_step(update_stmt)) != SQLITE_DONE ) {
+        printf(ERROR": failed while executing update; with code %d\n", res);
+        sqlite3_close(db);
+        return -1;
+    }
+    sqlite3_finalize(update_stmt);
+    sqlite3_close(db);
+    
+    return 0;
 }

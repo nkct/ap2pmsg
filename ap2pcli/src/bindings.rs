@@ -9,6 +9,7 @@ extern "C" {
     fn ap2p_list_connections(buf: *const Connection, buf_len: &i32) -> i32;
     fn ap2p_list_messages(buf: *const Message, buf_len: &i32) -> i32;
     fn ap2p_request_connection(addr: *const u8) -> i32;
+    fn ap2p_select_connection(conn_id: u64) -> i32;
 }
 
 #[repr(i8)]
@@ -97,4 +98,8 @@ pub fn list_messages(max: i32) -> Result<Vec<Message>, ()> {
 
 pub fn request_connection(addr: &str) -> i32 {
     return unsafe { ap2p_request_connection(addr.as_ptr()) }
+}
+
+pub fn select_connection(conn_id: u64) -> i32 {
+    return unsafe { ap2p_select_connection(conn_id) }
 }

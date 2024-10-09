@@ -69,7 +69,9 @@ fn main() -> Result<(), isize> {
                 }
                 "s" | "-s" | "select"  | "--select"  => { 
                     if let Ok(id) = next_arg()?.parse::<u64>() {
-                        println!("ID: {id}"); todo!("selecting a connection")
+                        println!("ID: {id}");
+                        let res = bindings::select_connection(id);
+                        println!("select_connection result: {res}"); 
                     } else {
                         log!("ERROR: <ID> must be a valid integer");
                         return Err(-1);
