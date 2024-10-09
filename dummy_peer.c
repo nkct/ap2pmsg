@@ -54,15 +54,16 @@ int main() {
       #define PARCEL_CONN_EST_KIND 1 // establish conn
       #define PARCEL_CONN_EST_LEN 73 // 1 + 8 + 64
       
-      srandom(time(NULL));
-      long self_id = random();
+      srandom(time(NULL)+1);
+      long peer_id = random();
+      printf("peer_id: %ld\n", peer_id);
       const char* self_name = "the_apple_of_eve";
       char resp[PARCEL_CONN_EST_LEN] = {0};
       {
           resp[0] = PARCEL_CONN_EST_KIND;
           
           for (int i=1;i<=4;i++) {
-              resp[i] = (self_id >> (8*(4-i))) & 0xFF;
+              resp[i] = (peer_id >> (8*(4-i))) & 0xFF;
           }
 
           strncpy(resp+5, self_name, MAX_SELF_NAME);
