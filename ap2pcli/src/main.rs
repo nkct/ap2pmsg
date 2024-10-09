@@ -1,6 +1,6 @@
 use std::env;
 
-mod bindings;
+mod libap2p;
 
 fn log(msg: &str, file: &str, line: u32) {
     const RED:    &str = "\x1b[31m";
@@ -58,7 +58,7 @@ fn main() -> Result<(), isize> {
         "conn" | "conns" | "connection" | "connections" => { 
             match next_arg()?.as_str() {
                 "l" | "-l" | "list"    | "--list"    => { 
-                    let conns = bindings::list_connections(5).expect("could not list conns");
+                    let conns = libap2p::list_connections(5).expect("could not list conns");
                     
                     println!("conn_count: {}", conns.len());
                     for conn in conns {
@@ -70,7 +70,7 @@ fn main() -> Result<(), isize> {
                 "s" | "-s" | "select"  | "--select"  => { 
                     if let Ok(id) = next_arg()?.parse::<u64>() {
                         println!("ID: {id}");
-                        let res = bindings::select_connection(id);
+                        let res = libap2p::select_connection(id);
                         println!("select_connection result: {res}"); 
                     } else {
                         log!("ERROR: <ID> must be a valid integer");
@@ -80,7 +80,7 @@ fn main() -> Result<(), isize> {
                 "r" | "-r" | "request" | "--request" => { 
                     let addr = next_arg()?;
                     println!("ADDR: {addr}"); 
-                    let res = bindings::request_connection(&addr);
+                    let res = libap2p::request_connection(&addr);
                     println!("request_connection result: {res}"); 
                 }
                 "a" | "-a" | "accept"  | "--accept"  => { 
@@ -100,7 +100,7 @@ fn main() -> Result<(), isize> {
         "msg"  | "msgs"  | "message"    | "messages"    => { 
             match next_arg()?.as_str() {
                 "l" | "-l" | "list" | "--list" => { 
-                    let msgs = bindings::list_messages(5).expect("could not list msgs");
+                    let msgs = libap2p::list_messages(5).expect("could not list msgs");
                     
                     println!("msgs_count: {}", msgs.len());
                     for msg in msgs {
