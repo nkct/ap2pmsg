@@ -25,11 +25,17 @@
 
 #define MAX_HOST_NAME 64 // in bytes
 
-#define PARCEL_CONN_EST_KIND 1 // establish conn
-#define PARCEL_CONN_EST_LEN 73 // 1 + 8 + 64
+#define PARCEL_CONN_REQ_KIND 1 // request conn
+#define PARCEL_CONN_REQ_LEN 73 // 1 + 8 + 64
 
-#define PARCEL_CONN_REJ_KIND 2 // reject conn establish attempt
+#define PARCEL_CONN_ACK_KIND 2 // acknowledge conn request
+#define PARCEL_CONN_ACK_LEN  1 // just kind
+
+#define PARCEL_CONN_REJ_KIND 3 // reject conn request
 #define PARCEL_CONN_REJ_LEN  1 // just kind
+
+#define PARCEL_CONN_ACC_KIND 1 // accept conn request
+#define PARCEL_CONN_ACC_LEN 73 // 1 + 8 + 8 + 64
 
 /* Reverse the byte order of an unsigned short. */
 #define revbo_u16(d) ( ((d&0xff)<<8)|(d>>8) )
@@ -54,7 +60,7 @@ int create_conn_table(sqlite3* db) {
         "online INTEGER DEFAULT 0, "
         "requested_at INTEGER DEFAULT (strftime('%s', 'now')) NOT NULL, "
         "resolved_at INTEGER, "
-        "status INTEGER DEFAULT 1 NOT NULL"
+        "status INTEGER DEFAULT 1 NOT NULL" // see ConnStatus
     ");";
     if ( sqlite3_exec(db, create_conns_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
         printf(ERROR": could not create the Connections table; %s\n", errmsg);
@@ -64,8 +70,16 @@ int create_conn_table(sqlite3* db) {
     return 0;
 }
 
-// self_id, peer_name and resolved_at of a pending conn are undefined
-// self_id and peer_name of a rejected conn are undefined
+typedef enum ConnStatus {
+    rejected    = -1, // the peer has reviewed this connection request and rejected it
+    accepted    =  0, // this connection has been accepted and can be used to send and recieve messages
+    pending     =  1, // the peer has not yet recieved this connection request
+    self_review =  2, // this connection has been requested of you, you can resolve (reject or accept), it
+    peer_review =  3, // the peer has recieved this connections request, but not yet resolved it
+} ConnStatus;
+
+// self_id, peer_name and resolved_at of an unaccepted conn are undefined
+// peer_id, self_id, peer_name of a rejected conn are undefined (peer_id can be reused)
 typedef struct Connection {
     long conn_id;
     long peer_id;
@@ -75,7 +89,7 @@ typedef struct Connection {
     bool online;
     long requested_at;
     long resolved_at;
-    char status; // negative on rejected, zero on accepted, positive on pending
+    char status; // see ConnStatus
 } Connection;
 
 int create_msg_table(sqlite3* db) {
