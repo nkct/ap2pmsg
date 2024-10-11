@@ -15,6 +15,9 @@
 #define INFO  "\x1b[34mINFO\x1b[0m"
 #define DEBUG  "\x1b[36mDEBUG\x1b[0m"
 
+#define SQL_ERR_FMT "%s (%d)"
+#define SQL_ERR(db) sqlite3_errmsg((db)), sqlite3_errcode((db))
+
 #define DB_FILE "ap2p_storage.db"
 
 #define CONN_STATUS_REJECTED -1
@@ -40,7 +43,7 @@
 /* Reverse the byte order of an unsigned short. */
 #define revbo_u16(d) ( ((d&0xff)<<8)|(d>>8) )
 
-#define startswith(str, pat) strncmp((str), (pat), strlen((pat)))
+#define startswith(str, pat) (strncmp((str), (pat), strlen((pat))) == 0)
 
 unsigned long ap2p_strlen(const char* s) {
     return strlen(s);
@@ -157,7 +160,7 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
     sqlite3 *db;
     
     if ( sqlite3_open(DB_FILE, &db) ) {
-        printf(ERROR": could not open database\n");
+        printf(ERROR": could not open database at '%s'\n", DB_FILE);
         return -1;
     }
     
@@ -223,7 +226,7 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
     sqlite3 *db;
     
     if ( sqlite3_open(DB_FILE, &db) ) {
-        printf(ERROR": could not open database\n");
+        printf(ERROR": could not open database at '%s'\n", DB_FILE);
         return -1;
     }
     
@@ -280,30 +283,30 @@ int ap2p_request_connection(char* peer_addr) {
     srandom(time(NULL));
     long peer_id = random();
     
-    { // insert the conn into the db
-        sqlite3 *db;
-        if ( sqlite3_open(DB_FILE, &db) ) {
-            printf(ERROR": could not open database\n");
-            return -1;
-        }
+    sqlite3 *db;
+    if ( sqlite3_open(DB_FILE, &db) ) {
+        printf(ERROR": could not open database at '%s'\n", DB_FILE);
+        return -1;
+    }
+    
+    { // insert the conn into the db        
+        int res;
         
         sqlite3_stmt *insert_stmt;
         const char* insert_sql = "INSERT INTO Connections (peer_id, peer_addr) VALUES (?, ?);";
-        while ( sqlite3_prepare_v2(db, insert_sql, -1, &insert_stmt, NULL) != SQLITE_OK ) {
-            if ( startswith(sqlite3_errmsg(db), "no such table") == 0 ) {
-                if ( create_conn_table(db) != SQLITE_OK ) {
-                    sqlite3_close(db);
-                    return -1;
-                } else {
-                    continue;
-                }
-            }
-            printf(ERROR": could not INSERT INTO Connections; %s (%d)\n", sqlite3_errmsg(db), sqlite3_errcode(db));
-            sqlite3_close(db);
-            return -1;
+        
+        do {
+            res = sqlite3_prepare_v2(db, insert_sql, -1, &insert_stmt, NULL);
+        } while ( 
+            res != SQLITE_OK && 
+            startswith(sqlite3_errmsg(db), "no such table") &&
+            (res = create_conn_table(db)) == SQLITE_OK 
+        );
+        if ( res != SQLITE_OK ) {
+            printf(ERROR": could not INSERT INTO Connections; "SQL_ERR_FMT"\n", SQL_ERR(db));
+            goto exit_err_cleanup_db;
         }
         
-        int res;
         if ( (res = sqlite3_bind_int64(insert_stmt, 1, peer_id)) != SQLITE_OK ) {
             printf(ERROR": failed to bind peer_id with code: (%d)\n", res);
             sqlite3_close(db);
@@ -404,7 +407,7 @@ int ap2p_request_connection(char* peer_addr) {
     if (conn_status == 0 || conn_status == -1) { // update conn in db
         sqlite3 *db;
         if ( sqlite3_open(DB_FILE, &db) ) {
-            printf(ERROR": could not open database\n");
+            printf(ERROR": could not open database at '%s'\n", DB_FILE);
             return -1;
         }
         
@@ -439,12 +442,17 @@ int ap2p_request_connection(char* peer_addr) {
     } // end update conn in db
     
     return 1;
+    
+    exit_err_cleanup_db:
+        sqlite3_close(db);
+    exit_err:
+        return -1;
 }
 
 int ap2p_select_connection(long conn_id) {
     sqlite3 *db;
     if ( sqlite3_open(DB_FILE, &db) ) {
-        printf(ERROR": could not open database\n");
+        printf(ERROR": could not open database at '%s'\n", DB_FILE);
         return -1;
     }
     
