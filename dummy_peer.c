@@ -49,31 +49,16 @@ int main() {
       }
       printf("]\n");
       
+      #define PARCEL_CONN_ACK_KIND 2
+      #define PARCEL_CONN_ACK_LEN  1
       
-      #define MAX_SELF_NAME 64 // in bytes
-      #define PARCEL_CONN_EST_KIND 1 // establish conn
-      #define PARCEL_CONN_EST_LEN 73 // 1 + 8 + 64
-      
-      srandom(time(NULL)+1);
-      long peer_id = random();
-      printf("peer_id: %ld\n", peer_id);
-      const char* self_name = "the_apple_of_eve";
-      char resp[PARCEL_CONN_EST_LEN] = {0};
-      {
-          resp[0] = PARCEL_CONN_EST_KIND;
-          
-          for (int i=1;i<=4;i++) {
-              resp[i] = (peer_id >> (8*(4-i))) & 0xFF;
-          }
-
-          strncpy(resp+5, self_name, MAX_SELF_NAME);
-      }
-      send(client_sock, resp, PARCEL_CONN_EST_LEN, 0);
-      printf("sent %s back\n", resp);
-      printf("bytes: [");
-      for (int i=0; i<PARCEL_CONN_EST_LEN; i++) {
+      char resp[1];
+      resp[0] = PARCEL_CONN_ACK_KIND;
+      send(client_sock, resp, PARCEL_CONN_ACK_LEN, 0);
+      printf("sent [");
+      for (int i=0; i<PARCEL_CONN_ACK_LEN; i++) {
           printf("%d,", resp[i]);
       }
-      printf("]\n");
+      printf("] back\n");
   }
 }
