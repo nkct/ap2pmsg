@@ -168,34 +168,33 @@ typedef struct Message {
 // non-zero on error
 int ap2p_list_connections(Connection* buf, int* buf_len) {
     sqlite3 *db;
-    
     if ( sqlite3_open(DB_FILE, &db) ) {
         printf(ERROR": could not open database at '%s'\n", DB_FILE);
-        return -1;
-    }
-    
-    sqlite3_stmt *conn_stmt;
-    while ( sqlite3_prepare_v2(db, "SELECT * FROM Connections;", -1, &conn_stmt, NULL) != SQLITE_OK ) {
-        if ( startswith(sqlite3_errmsg(db), "no such table") == 0 ) {
-            if ( create_conn_table(db) != SQLITE_OK ) {
-                sqlite3_close(db);
-                return -1;
-            } else {
-                continue;
-            }
-        }
-        printf(ERROR": could not SELECT * FROM Connections; %s (%d)\n", sqlite3_errmsg(db), sqlite3_errcode(db));
-        sqlite3_close(db);
-        return -1;
+        goto exit_err;
     }
     
     int res;
+    sqlite3_stmt *conn_stmt;
+    const char* select_sql = "SELECT * FROM Connections;";
+    res = sqlite3_prepare_v2(db, select_sql, -1, &conn_stmt, NULL);
+    if ( res != SQLITE_OK && startswith(sqlite3_errmsg(db), "no such table") ) {
+        if ( create_conn_table(db) == SQLITE_OK ) {
+            res = sqlite3_prepare_v2(db, select_sql, -1, &conn_stmt, NULL);
+        } else {
+            goto exit_err_db;
+        }
+    }
+    if ( res != SQLITE_OK ) {
+        printf(ERROR": could not SELECT * FROM Connections; "SQL_ERR_FMT"\n", SQL_ERR(db));
+        goto exit_err_db;
+    }
+    
     int row_count = 0;
     while ( (res = sqlite3_step(conn_stmt)) == SQLITE_ROW ) {
         int status = sqlite3_column_int(conn_stmt, 8);
         
         char* peer_name;
-        if ( status==CONN_STATUS_ACCEPTED ) {
+        if ( status==accepted ) {
             peer_name = sqlite3_malloc(sqlite3_column_bytes(conn_stmt, 3));
             sprintf(peer_name, "%s", sqlite3_column_text(conn_stmt, 3));
         } else {
@@ -221,14 +220,18 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
     }
     if ( res != SQLITE_DONE ) {
         printf(ERROR": failed while iterating conn result; with code %d\n", res);
-        sqlite3_close(db);
-        return -1;
+        goto exit_err_db;
     }
     sqlite3_finalize(conn_stmt);
     *buf_len = row_count;
     
     sqlite3_close(db);
     return 0;
+    
+    exit_err_db:
+        sqlite3_close(db);
+    exit_err:
+        return -1;
 }
 
 // non-zero on error
@@ -237,25 +240,25 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
     
     if ( sqlite3_open(DB_FILE, &db) ) {
         printf(ERROR": could not open database at '%s'\n", DB_FILE);
-        return -1;
-    }
-    
-    sqlite3_stmt *msg_stmt;
-    while ( sqlite3_prepare_v2(db, "SELECT * FROM Messages;", -1, &msg_stmt, NULL) != SQLITE_OK ) {
-        if ( startswith(sqlite3_errmsg(db), "no such table") == 0 ) {
-            if ( create_msg_table(db) != SQLITE_OK ) {
-                sqlite3_close(db);
-                return -1;
-            } else {
-                continue;
-            }
-        }
-        printf(ERROR": could not SELECT * FROM Messages; %s (%d)\n", sqlite3_errmsg(db), sqlite3_errcode(db));
-        sqlite3_close(db);
-        return -1;
+        goto exit_err;
     }
     
     int res;
+    sqlite3_stmt *msg_stmt;
+    const char* select_sql = "SELECT * FROM Messages;";
+    res = sqlite3_prepare_v2(db, select_sql, -1, &msg_stmt, NULL);
+    if ( res != SQLITE_OK && startswith(sqlite3_errmsg(db), "no such table") ) {
+        if ( create_msg_table(db) == SQLITE_OK ) {
+            res = sqlite3_prepare_v2(db, select_sql, -1, &msg_stmt, NULL);
+        } else {
+            goto exit_err_db;
+        }
+    }
+    if ( res != SQLITE_OK ) {
+        printf(ERROR": could not SELECT * FROM Messages; "SQL_ERR_FMT"\n", SQL_ERR(db));
+        goto exit_err_db;
+    }
+    
     int row_count = 0;
     while ( (res = sqlite3_step(msg_stmt)) == SQLITE_ROW ) {
         unsigned long content_len = sqlite3_column_bytes(msg_stmt, 5);
@@ -276,14 +279,18 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
     }
     if ( res != SQLITE_DONE ) {
         printf(ERROR": failed while executing select; with code %d\n", res);
-        sqlite3_close(db);
-        return -1;
+        goto exit_err_db;
     }
     sqlite3_finalize(msg_stmt);
     *buf_len = row_count;
     
     sqlite3_close(db);
     return 0;
+    
+    exit_err_db:
+        sqlite3_close(db);
+    exit_err:
+        return -1;
 }
 
 // negative on error
@@ -546,6 +553,7 @@ int ap2p_accept_connection(long conn_id) {
     
     sqlite3_close(db);
     return 0;
+    
     exit_err_net:
         close(peer_sock);
     exit_err_db:
@@ -558,39 +566,41 @@ int ap2p_select_connection(long conn_id) {
     sqlite3 *db;
     if ( sqlite3_open(DB_FILE, &db) ) {
         printf(ERROR": could not open database at '%s'\n", DB_FILE);
-        return -1;
-    }
-    
-    sqlite3_stmt *update_stmt;
-    const char* update_sql = "UPDATE State SET value=(?) WHERE key='selected_conn';";
-    while ( sqlite3_prepare_v2(db, update_sql, -1, &update_stmt, NULL) != SQLITE_OK ) {
-        if ( startswith(sqlite3_errmsg(db), "no such table") == 0 ) {
-            if ( create_state_table(db) != SQLITE_OK ) {
-                sqlite3_close(db);
-                return -1;
-            } else {
-                continue;
-            }
-        }
-        printf(ERROR": could not UPDATE State; %s (%d)\n", sqlite3_errmsg(db), sqlite3_errcode(db));
-        sqlite3_close(db);
-        return -1;
+        goto exit_err;
     }
     
     int res;
+    sqlite3_stmt *update_stmt;
+    const char* update_sql = "UPDATE State SET value=(?) WHERE key='selected_conn';";
+    res = sqlite3_prepare_v2(db, update_sql, -1, &update_stmt, NULL);
+    if ( res != SQLITE_OK && startswith(sqlite3_errmsg(db), "no such table") ) {
+        if ( create_state_table(db) == SQLITE_OK ) {
+            res = sqlite3_prepare_v2(db, update_sql, -1, &update_stmt, NULL);
+        } else {
+            goto exit_err_db;
+        }
+    }
+    if ( res != SQLITE_OK ) {
+        printf(ERROR": could not SELECT status, peer_addr, self_id FROM Connections WHERE conn_id=%ld; "SQL_ERR_FMT"\n", conn_id, SQL_ERR(db));
+        goto exit_err_db;
+    }
+    
     if ( (res = sqlite3_bind_int64(update_stmt, 1, conn_id)) != SQLITE_OK ) {
         printf(ERROR": failed to bind conn_id with code: (%d)\n", res);
-        sqlite3_close(db);
-        return -1;
+        goto exit_err_db;
     }
         
     if ( (res = sqlite3_step(update_stmt)) != SQLITE_DONE ) {
         printf(ERROR": failed while executing update; with code %d\n", res);
-        sqlite3_close(db);
-        return -1;
+        goto exit_err_db;
     }
     sqlite3_finalize(update_stmt);
-    sqlite3_close(db);
     
+    sqlite3_close(db);
     return 0;
+    
+    exit_err_db:
+        sqlite3_close(db);
+    exit_err:
+        return -1;
 }
