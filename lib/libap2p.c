@@ -30,13 +30,13 @@
 #define PARCEL_CONN_REQ_LEN 73 // kind[1] + peer_id[8] + peer_addr[64]
 
 #define PARCEL_CONN_ACK_KIND 2 // acknowledge conn request
-#define PARCEL_CONN_ACK_LEN  1 // just kind
+#define PARCEL_CONN_ACK_LEN  9 // kind[1] + self_id[8]
 
 #define PARCEL_CONN_REJ_KIND 3 // reject conn request
-#define PARCEL_CONN_REJ_LEN  1 // just kind
+#define PARCEL_CONN_REJ_LEN  9 // kind[1] + self_id[8]
 
 #define PARCEL_CONN_ACC_KIND 1 // accept conn request
-#define PARCEL_CONN_ACC_LEN 73 // kind[1] + self_id[8] + peer_id[8] + peer_addr[64]
+#define PARCEL_CONN_ACC_LEN 81 // kind[1] + self_id[8] + peer_id[8] + peer_addr[64]
 
 /* Reverse the byte order of an unsigned short. */
 #define revbo_u16(d) ( ((d&0xff)<<8)|(d>>8) )
@@ -363,11 +363,11 @@ int ap2p_request_connection(char* peer_addr) {
         {
             parcel[0] = PARCEL_CONN_REQ_KIND;
             
-            for (int i=1;i<=4;i++) {
-                parcel[i] = (peer_id >> (8*(4-i))) & 0xFF;
+            for (int i=1;i<=8;i++) {
+                parcel[i] = (peer_id >> (8*(8-i))) & 0xFF;
             }
 
-            strncpy(parcel+5, self_name, MAX_HOST_NAME);
+            strncpy(parcel+9, self_name, MAX_HOST_NAME);
         }
         if ( send(peer_sock, parcel, PARCEL_CONN_REQ_LEN, 0) < 0) {
             printf(WARN": could not send parcel to peer at "NET_ERR_FMT"; conn is pending\n", NET_ERR(peer_addr));
@@ -376,11 +376,24 @@ int ap2p_request_connection(char* peer_addr) {
         printf(DEBUG": sent conn req parcel to peer at %s with [peer_id: %ld, self_name: '%s']\n", peer_addr, peer_id, self_name);
         
         printf(INFO": awaiting response from peer at %s\n", peer_addr);
-        if ( recv(peer_sock, &resp_kind, PARCEL_CONN_ACK_LEN, 0) < 1 ) {
+        
+        char resp[PARCEL_CONN_ACK_LEN];
+        if ( recv(peer_sock, &resp, PARCEL_CONN_ACK_LEN, 0) < PARCEL_CONN_ACK_LEN ) {
             printf(WARN": could not recieve response from peer at "NET_ERR_FMT"; conn is pending\n", NET_ERR(peer_addr));
             goto exit_pending;
         }
-        printf(DEBUG": recived response of kind [%d] from peer at %s\n", resp_kind, peer_addr);
+        printf(DEBUG": recieved response [%s] from peer at %s\n", resp, peer_addr);
+        
+        resp_kind = resp[0];
+        long resp_peer_id = 0;
+        for (int i=0; i<8; i++) {
+            resp_peer_id = (resp_peer_id << 8) && resp[i+1];
+        }
+        
+        if (resp_peer_id != peer_id) {
+            printf(WARN": peer at %s attempted to ack conn with different peer_id (%ld != %ld)\n", peer_addr, resp_peer_id, peer_id);
+            goto exit_pending;
+        }
     } // end attempt to communicate the conn to the peer
     
     if ( resp_kind != PARCEL_CONN_ACK_KIND ) {
@@ -534,15 +547,15 @@ int ap2p_accept_connection(long conn_id) {
         {
             parcel[0] = PARCEL_CONN_ACC_KIND;
             
-            for (int i=1;i<=4;i++) {
-                parcel[i] = (self_id >> (8*(4-i))) & 0xFF;
+            for (int i=1;i<=8;i++) {
+                parcel[i] = (self_id >> (8*(8-i))) & 0xFF;
             }
             
-            for (int i=1;i<=4;i++) {
-                parcel[i] = (peer_id >> (8*(4-i))) & 0xFF;
+            for (int i=9;i<=16;i++) {
+                parcel[i] = (peer_id >> (8*(8-i))) & 0xFF;
             }
 
-            strncpy(parcel+5, self_name, MAX_HOST_NAME);
+            strncpy(parcel+17, self_name, MAX_HOST_NAME);
         }
         if ( send(peer_sock, parcel, PARCEL_CONN_ACC_LEN, 0) < 0) {
             printf(WARN": could not send parcel to peer at "NET_ERR_FMT"\n", NET_ERR(peer_addr));
