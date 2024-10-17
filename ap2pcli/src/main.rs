@@ -124,6 +124,10 @@ fn main() -> Result<(), isize> {
                 }
             }
         }
+        "listen" | "l" => {
+            let res = libap2p::listen();
+            println!("Finished listening with {}", res);
+        }
         "help" | "-h"    | "--help"                     => { 
             println!("Usage: {prog_path} [conn | conns | connection | connections] [l | -l | list    | --list   ]");
             print!("{}", " ".repeat(50 + prog_path.len()));              println!("[s | -s | select  | --select ] <ID>");

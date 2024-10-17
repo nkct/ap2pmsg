@@ -22,12 +22,13 @@
 
 #define DB_FILE "ap2p_storage.db"
 
+#define LISTEN_ADDR "0.0.0.0"
 #define DEFAULT_PORT 7676
 
 #define MAX_HOST_NAME 64 // in bytes
 
 #define PARCEL_CONN_REQ_KIND 1 // request conn
-#define PARCEL_CONN_REQ_LEN 73 // kind[1] + peer_id[8] + peer_addr[64]
+#define PARCEL_CONN_REQ_LEN 73 // kind[1] + peer_id[8] + self_name[64]
 
 #define PARCEL_CONN_ACK_KIND 2 // acknowledge conn request
 #define PARCEL_CONN_ACK_LEN  9 // kind[1] + self_id[8]
@@ -35,8 +36,8 @@
 #define PARCEL_CONN_REJ_KIND 3 // reject conn request
 #define PARCEL_CONN_REJ_LEN  9 // kind[1] + self_id[8]
 
-#define PARCEL_CONN_ACC_KIND 1 // accept conn request
-#define PARCEL_CONN_ACC_LEN 81 // kind[1] + self_id[8] + peer_id[8] + peer_addr[64]
+#define PARCEL_CONN_ACC_KIND 4 // accept conn request
+#define PARCEL_CONN_ACC_LEN 81 // kind[1] + self_id[8] + peer_id[8] + self_name[64]
 
 /* Reverse the byte order of an unsigned short. */
 #define revbo_u16(d) ( ((d&0xff)<<8)|(d>>8) )
@@ -377,6 +378,7 @@ int ap2p_request_connection(char* peer_addr) {
         
         printf(INFO": awaiting response from peer at %s\n", peer_addr);
         
+        // TODO: implement a timeout on recv (see setsockopt() or set non-blocking and poll)
         char resp[PARCEL_CONN_ACK_LEN];
         if ( recv(peer_sock, &resp, PARCEL_CONN_ACK_LEN, 0) < PARCEL_CONN_ACK_LEN ) {
             printf(WARN": could not recieve response from peer at "NET_ERR_FMT"; conn is pending\n", NET_ERR(peer_addr));
@@ -614,6 +616,72 @@ int ap2p_select_connection(long conn_id) {
     sqlite3_close(db);
     return 0;
     
+    exit_err_db:
+        sqlite3_close(db);
+    exit_err:
+        return -1;
+}
+
+int ap2p_listen() {
+    sqlite3 *db;
+    if ( sqlite3_open(DB_FILE, &db) ) {
+        printf(ERROR": could not open database at '%s'\n", DB_FILE);
+        goto exit_err;
+    }
+    
+    int listening_sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (listening_sock < 0) {
+      printf(ERROR": peer socket creation failed\n");
+      goto exit_err_net;
+    }
+  
+    struct sockaddr_in listening_addr = {
+        .sin_family = AF_INET,
+        .sin_addr.s_addr = inet_addr(LISTEN_ADDR),
+        .sin_port = revbo_u16(DEFAULT_PORT),
+    };
+    if (bind(listening_sock, (struct sockaddr *)&listening_addr, sizeof(listening_addr)) < 0) {
+      printf(ERROR": failed to bind server socket");
+      goto exit_err_net;
+    }
+  
+    if (listen(listening_sock, 1) < 0) {
+      printf(ERROR": failed to listen on peer socket");
+      goto exit_err_net;
+    }
+    printf(INFO": Listening for parcels at %s:%d...\n", LISTEN_ADDR, DEFAULT_PORT);
+    
+    struct sockaddr_in incoming_addr;
+    int incoming_addr_len = sizeof(incoming_addr);
+    while (1) {
+        int incoming_sock = accept(listening_sock, (struct sockaddr*)&incoming_addr, (socklen_t*)&incoming_addr_len);
+        char incoming_addr_str[15];
+        inet_ntop(AF_INET, &incoming_addr.sin_addr, incoming_addr_str, 15);
+        
+        char resp_kind;
+        recv(incoming_sock, &resp_kind, 1, 0);
+        printf(DEBUG": conn from %s:%d with kind: %d\n", incoming_addr_str, incoming_addr.sin_port, resp_kind);
+        
+        switch (resp_kind) {
+            break; case PARCEL_CONN_REQ_KIND:
+                printf(INFO": recieved a CONN_REQ parcel\n");
+            break; case PARCEL_CONN_ACK_KIND:
+                printf(INFO": recieved a CONN_ACK parcel\n");
+            break; case PARCEL_CONN_REJ_KIND:
+                printf(INFO": recieved a CONN_REJ parcel\n");
+            break; case PARCEL_CONN_ACC_KIND:
+                printf(INFO": recieved a CONN_ACC parcel\n");
+            break; default:
+                printf(WARN": invalid resp_kind: %d\n", resp_kind);
+        }
+    }
+    
+    close(listening_sock);
+    sqlite3_close(db);
+    return 0;
+    
+    exit_err_net:
+        close(listening_sock);
     exit_err_db:
         sqlite3_close(db);
     exit_err:
