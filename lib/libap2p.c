@@ -442,6 +442,7 @@ int ap2p_request_connection(char* peer_addr) {
 int ap2p_accept_connection(long conn_id) {
     char* peer_addr;
     long self_id;
+    int conn_status;
     
     long peer_id = generate_id();
     char self_name[MAX_HOST_NAME];
@@ -476,11 +477,7 @@ int ap2p_accept_connection(long conn_id) {
         
         
         if ( (res = sqlite3_step(select_stmt)) == SQLITE_ROW ) {
-            int status = sqlite3_column_int(select_stmt, 0);
-            if (status != self_review) {
-                printf(ERROR": attempted to accept a connection which wasn't awaiting review, conn status: (%c)\n", status);
-                goto exit_err_db;
-            }
+            conn_status = sqlite3_column_int(select_stmt, 0);
             
             peer_addr = sqlite3_malloc(sqlite3_column_bytes(select_stmt, 1));
             sprintf(peer_addr, "%s", sqlite3_column_text(select_stmt, 1));
@@ -493,6 +490,11 @@ int ap2p_accept_connection(long conn_id) {
         }
         sqlite3_finalize(select_stmt);
     } // end retrieve conn info from db
+    
+    if (conn_status != self_review) {
+        printf(ERROR": attempted to accept a connection which wasn't awaiting review, conn status: (%c)\n", conn_status);
+        goto exit_err_db;
+    }
     
     { // update conn in db
         sqlite3_stmt *update_stmt;

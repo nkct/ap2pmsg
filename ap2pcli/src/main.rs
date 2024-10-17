@@ -85,7 +85,9 @@ fn main() -> Result<(), isize> {
                 }
                 "a" | "-a" | "accept"  | "--accept"  => { 
                     if let Ok(id) = next_arg()?.parse::<u64>() {
-                        println!("ID: {id}"); todo!("accepting a connection")
+                        println!("ID: {id}");
+                        let res = libap2p::accept_connection(id);
+                        println!("accept_connection result: {res}"); 
                     } else {
                         log!("ERROR: <ID> must be a valid integer");
                         return Err(-1);

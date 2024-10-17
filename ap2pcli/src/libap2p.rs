@@ -10,6 +10,7 @@ extern "C" {
     fn ap2p_list_messages(buf: *const Message, buf_len: &i32) -> i32;
     fn ap2p_request_connection(addr: *const u8) -> i32;
     fn ap2p_select_connection(conn_id: u64) -> i32;
+    fn ap2p_accept_connection(conn_id: u64) -> i32;
 }
 
 #[repr(i8)]
@@ -102,4 +103,8 @@ pub fn request_connection(addr: &str) -> i32 {
 
 pub fn select_connection(conn_id: u64) -> i32 {
     return unsafe { ap2p_select_connection(conn_id) }
+}
+
+pub fn accept_connection(conn_id: u64) -> i32 {
+    return unsafe { ap2p_accept_connection(conn_id) }
 }
