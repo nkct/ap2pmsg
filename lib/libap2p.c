@@ -294,20 +294,18 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
         return -1;
 }
 
-// negative on error
-// positive on pending
-// zero on acked
+// non-zero on error
 int ap2p_request_connection(char* peer_addr) {
     long peer_id = generate_id();
     
-    int res;
     sqlite3 *db;
     if ( sqlite3_open(DB_FILE, &db) ) {
         printf(ERROR": could not open database at '%s'\n", DB_FILE);
         goto exit_err;
     }
     
-    { // insert the conn into the db        
+    { // insert the conn into the db     
+        int res;
         sqlite3_stmt *insert_stmt;
         const char* insert_sql = "INSERT INTO Connections (peer_id, peer_addr) VALUES (?, ?);";
         res = sqlite3_prepare_v2(db, insert_sql, -1, &insert_stmt, NULL);
@@ -337,15 +335,15 @@ int ap2p_request_connection(char* peer_addr) {
             goto exit_err_db;
         }
         sqlite3_finalize(insert_stmt);
+        sqlite3_close(db);
     } // end inserting the conn into the db
     
     int peer_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (peer_sock < 0) {
-        printf(ERROR": peer socket creation failed\n");
-        goto exit_err_net;
+        printf(ERROR": peer socket creation failed; conn is pending\n");
+        goto exit_pending;
     }
     
-    char resp_kind;
     { // attempt to communicate the conn req to the peer
         struct sockaddr_in peer_sockaddr = {
             .sin_family = AF_INET,
@@ -356,7 +354,6 @@ int ap2p_request_connection(char* peer_addr) {
             printf(WARN": could not connect to peer at "NET_ERR_FMT"; conn is pending\n", NET_ERR(peer_addr));
             goto exit_pending;
         }
-        printf(INFO": connected to peer at %s\n", peer_addr);
         
         char self_name[MAX_HOST_NAME];
         cpy_self_name(self_name);
@@ -370,71 +367,18 @@ int ap2p_request_connection(char* peer_addr) {
 
             strncpy(parcel+9, self_name, MAX_HOST_NAME);
         }
-        if ( send(peer_sock, parcel, PARCEL_CONN_REQ_LEN, 0) < 0) {
+        printf(DEBUG": sending conn req parcel to peer at %s with [peer_id: %ld, self_name: '%s']\n", peer_addr, peer_id, self_name);
+        if ( send(peer_sock, parcel, PARCEL_CONN_REQ_LEN, 0) > 0) {
+            printf(INFO": sent connection request to peer at %s\n", peer_addr);
+        } else {
             printf(WARN": could not send parcel to peer at "NET_ERR_FMT"; conn is pending\n", NET_ERR(peer_addr));
-            goto exit_pending;
-        }
-        printf(DEBUG": sent conn req parcel to peer at %s with [peer_id: %ld, self_name: '%s']\n", peer_addr, peer_id, self_name);
-        
-        printf(INFO": awaiting response from peer at %s\n", peer_addr);
-        
-        // TODO: implement a timeout on recv (see setsockopt() or set non-blocking and poll)
-        char resp[PARCEL_CONN_ACK_LEN];
-        if ( recv(peer_sock, &resp, PARCEL_CONN_ACK_LEN, 0) < PARCEL_CONN_ACK_LEN ) {
-            printf(WARN": could not recieve response from peer at "NET_ERR_FMT"; conn is pending\n", NET_ERR(peer_addr));
-            goto exit_pending;
-        }
-        printf(DEBUG": recieved response [%s] from peer at %s\n", resp, peer_addr);
-        
-        resp_kind = resp[0];
-        long resp_peer_id = 0;
-        for (int i=0; i<8; i++) {
-            resp_peer_id = (resp_peer_id << 8) && resp[i+1];
-        }
-        
-        if (resp_peer_id != peer_id) {
-            printf(WARN": peer at %s attempted to ack conn with different peer_id (%ld != %ld)\n", peer_addr, resp_peer_id, peer_id);
-            goto exit_pending;
         }
     } // end attempt to communicate the conn to the peer
-    
-    if ( resp_kind != PARCEL_CONN_ACK_KIND ) {
-        printf(WARN": invalid response kind from peer at "NET_ERR_FMT"; conn is pending\n", NET_ERR(peer_addr));
-        goto exit_pending;
-    } else { // acked, update conn in db
-        printf(INFO": peer at %s acknowdelged the connection request\n", peer_addr);
-        printf(DEBUG": updating conn to ststus=2 where peer_id=%ld\n", peer_id);
-        
-        sqlite3_stmt *update_stmt;
-        const char* update_sql = ""
-        "UPDATE Connections "
-        "SET online=1, updated_at=(strftime('%s', 'now')), status=2 "
-        "WHERE peer_id=(?);";
-        // conn table must exist since we create it above if it doesn't
-        if ( sqlite3_prepare_v2(db, update_sql, -1, &update_stmt, NULL) != SQLITE_OK ) {
-            printf(ERROR": could not UPDATE Connections; "SQL_ERR_FMT"\n", SQL_ERR(db));
-            goto exit_err_db;
-        }
-        
-        if ( (res = sqlite3_bind_int64(update_stmt, 1, peer_id)) != SQLITE_OK ) {
-            printf(ERROR": failed to bind peer_id with code: (%d)\n", res);
-            goto exit_err_db;
-        }
-        
-        if ( (res = sqlite3_step(update_stmt)) != SQLITE_DONE ) {
-            printf(ERROR": failed while executing UPDATE; with code %d\n", res);
-            goto exit_err_db;
-        }
-        sqlite3_finalize(update_stmt);
-    }
-    
+       
     exit_pending:
         close(peer_sock);
-        sqlite3_close(db);
-        return 1;
+        return 0;
         
-    exit_err_net:
-        close(peer_sock);
     exit_err_db:
         sqlite3_close(db);
     exit_err:
