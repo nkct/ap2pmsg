@@ -27,6 +27,7 @@
 
 #define MAX_HOST_NAME 64 // in bytes
 
+// self and peer ids are from the perspective of the sender
 #define PARCEL_CONN_REQ_KIND 1 // request conn
 #define PARCEL_CONN_REQ_LEN 73 // kind[1] + peer_id[8] + self_name[64]
 
@@ -357,7 +358,7 @@ int ap2p_request_connection(char* peer_addr) {
         
         char self_name[MAX_HOST_NAME];
         cpy_self_name(self_name);
-        char parcel[PARCEL_CONN_REQ_LEN] = {0};
+        unsigned char parcel[PARCEL_CONN_REQ_LEN] = {0};
         {
             parcel[0] = PARCEL_CONN_REQ_KIND;
             
@@ -365,7 +366,7 @@ int ap2p_request_connection(char* peer_addr) {
                 parcel[i] = (peer_id >> (8*(8-i))) & 0xFF;
             }
 
-            strncpy(parcel+9, self_name, MAX_HOST_NAME);
+            strncpy((char*)parcel+9, self_name, MAX_HOST_NAME);
         }
         printf(DEBUG": sending conn req parcel to peer at %s with [peer_id: %ld, self_name: '%s']\n", peer_addr, peer_id, self_name);
         if ( send(peer_sock, parcel, PARCEL_CONN_REQ_LEN, 0) > 0) {
@@ -491,7 +492,7 @@ int ap2p_accept_connection(long conn_id) {
         }
         printf(INFO": connected to peer at %s\n", peer_addr);
         
-        char parcel[PARCEL_CONN_ACC_LEN] = {0};
+        unsigned char parcel[PARCEL_CONN_ACC_LEN] = {0};
         {
             parcel[0] = PARCEL_CONN_ACC_KIND;
             
@@ -503,7 +504,7 @@ int ap2p_accept_connection(long conn_id) {
                 parcel[i] = (peer_id >> (8*(8-i))) & 0xFF;
             }
 
-            strncpy(parcel+17, self_name, MAX_HOST_NAME);
+            strncpy((char*)parcel+17, self_name, MAX_HOST_NAME);
         }
         if ( send(peer_sock, parcel, PARCEL_CONN_ACC_LEN, 0) < 0) {
             printf(WARN": could not send parcel to peer at "NET_ERR_FMT"\n", NET_ERR(peer_addr));
@@ -567,6 +568,7 @@ int ap2p_select_connection(long conn_id) {
 }
 
 int ap2p_listen() {
+    int res;
     sqlite3 *db;
     if ( sqlite3_open(DB_FILE, &db) ) {
         printf(ERROR": could not open database at '%s'\n", DB_FILE);
@@ -585,12 +587,12 @@ int ap2p_listen() {
         .sin_port = revbo_u16(DEFAULT_PORT),
     };
     if (bind(listening_sock, (struct sockaddr *)&listening_addr, sizeof(listening_addr)) < 0) {
-      printf(ERROR": failed to bind server socket");
+      printf(ERROR": failed to bind server socket\n");
       goto exit_err_net;
     }
   
     if (listen(listening_sock, 1) < 0) {
-      printf(ERROR": failed to listen on peer socket");
+      printf(ERROR": failed to listen on peer socket\n");
       goto exit_err_net;
     }
     printf(INFO": Listening for parcels at %s:%d...\n", LISTEN_ADDR, DEFAULT_PORT);
@@ -602,13 +604,97 @@ int ap2p_listen() {
         char incoming_addr_str[15];
         inet_ntop(AF_INET, &incoming_addr.sin_addr, incoming_addr_str, 15);
         
-        char resp_kind;
-        recv(incoming_sock, &resp_kind, 1, 0);
-        printf(DEBUG": conn from %s:%d with kind: %d\n", incoming_addr_str, incoming_addr.sin_port, resp_kind);
+        char parcel_kind;
+        recv(incoming_sock, &parcel_kind, 1, 0);
+        printf(DEBUG": conn from %s:%d with kind: %d\n", incoming_addr_str, incoming_addr.sin_port, parcel_kind);
         
-        switch (resp_kind) {
+        switch (parcel_kind) {
             break; case PARCEL_CONN_REQ_KIND:
                 printf(INFO": recieved a CONN_REQ parcel\n");
+                unsigned char parcel[PARCEL_CONN_REQ_LEN-1];
+                if (recv(incoming_sock, &parcel, PARCEL_CONN_REQ_LEN-1, 0) < PARCEL_CONN_REQ_LEN-1) {
+                    printf(WARN": could not read parcel contents\n");
+                }
+
+                long self_id = 0;
+                char peer_name[MAX_HOST_NAME] = {0};
+                {
+                    for (int i=0;i<8;i++) {
+                        self_id = (self_id << 8) + parcel[i];
+                    }
+
+                    strncpy(peer_name, (char*)parcel+8, MAX_HOST_NAME);
+                }
+                printf(DEBUG": peer '%s' requested conn with self_id: %ld, \n", peer_name, self_id);
+                
+                sqlite3_stmt *insert_stmt;
+                const char* insert_sql = "INSERT INTO Connections (self_id, peer_name, peer_addr, status) VALUES (?, ?, ?, 2);";
+                res = sqlite3_prepare_v2(db, insert_sql, -1, &insert_stmt, NULL);
+                if ( res != SQLITE_OK && startswith(sqlite3_errmsg(db), "no such table") ) {
+                    if ( create_conn_table(db) == SQLITE_OK ) {
+                        res = sqlite3_prepare_v2(db, insert_sql, -1, &insert_stmt, NULL);
+                    } else {
+                        goto exit_err_db;
+                    }
+                }
+                if ( res != SQLITE_OK ) {
+                    printf(ERROR": could not INSERT INTO Connections; "SQL_ERR_FMT"\n", SQL_ERR(db));
+                    goto exit_err_db;
+                }
+                
+                if ( (res = sqlite3_bind_int64(insert_stmt, 1, self_id)) != SQLITE_OK ) {
+                    printf(ERROR": failed to bind self_id with code: (%d)\n", res);
+                    goto exit_err_db;
+                }
+                if ( (res = sqlite3_bind_text(insert_stmt, 2, peer_name, strlen(peer_name), SQLITE_STATIC)) != SQLITE_OK ) {
+                    printf(ERROR": failed to bind peer_name with code: (%d)\n", res);
+                    goto exit_err_db;
+                }
+                if ( (res = sqlite3_bind_text(insert_stmt, 3, incoming_addr_str, strlen(incoming_addr_str), SQLITE_STATIC)) != SQLITE_OK ) {
+                    printf(ERROR": failed to bind peer_addr with code: (%d)\n", res);
+                    goto exit_err_db;
+                }
+                
+                if ( (res = sqlite3_step(insert_stmt)) != SQLITE_DONE ) {
+                    printf(ERROR": failed while executing insert; with code %d\n", res);
+                    goto exit_err_db;
+                }
+                sqlite3_finalize(insert_stmt);
+                printf(DEBUG": inserted requested conn into the db, with self_id: %ld, peer_name: %s, peer_addr: %s\n", self_id, peer_name, incoming_addr_str);
+                
+                int peer_sock = socket(AF_INET, SOCK_STREAM, 0);
+                if (peer_sock < 0) {
+                    printf(ERROR": peer socket creation failed\n");
+                    close(peer_sock);
+                    goto exit_err_net;
+                }
+                { // communicate the ack to the peer
+                    struct sockaddr_in peer_sockaddr = {
+                        .sin_family = AF_INET,
+                        .sin_addr.s_addr = inet_addr(incoming_addr_str),
+                        .sin_port = revbo_u16(DEFAULT_PORT),
+                    };
+                    if ( connect(peer_sock, (struct sockaddr*)&peer_sockaddr, sizeof(peer_sockaddr)) != 0 ) {
+                        printf(WARN": could not connect to peer at "NET_ERR_FMT"\n", NET_ERR(incoming_addr_str));
+                        goto exit_err_net;
+                    }
+                    printf(INFO": connected to peer at %s\n", incoming_addr_str);
+                    
+                    unsigned char parcel[PARCEL_CONN_ACK_LEN] = {0};
+                    {
+                        parcel[0] = PARCEL_CONN_ACK_KIND;
+                        
+                        for (int i=1;i<=8;i++) {
+                            parcel[i] = (self_id >> (8*(8-i))) & 0xFF;
+                        }
+                    }
+                    if ( send(peer_sock, parcel, PARCEL_CONN_ACK_LEN, 0) < 0) {
+                        printf(WARN": could not send parcel to peer at "NET_ERR_FMT"\n", NET_ERR(incoming_addr_str));
+                        goto exit_err_net;
+                    }
+                    printf(DEBUG": sent ack parcel to peer at %s with [self_id: %ld]\n", incoming_addr_str, self_id);
+                } // end communicate the ack to the peer
+                
             break; case PARCEL_CONN_ACK_KIND:
                 printf(INFO": recieved a CONN_ACK parcel\n");
             break; case PARCEL_CONN_REJ_KIND:
@@ -616,7 +702,7 @@ int ap2p_listen() {
             break; case PARCEL_CONN_ACC_KIND:
                 printf(INFO": recieved a CONN_ACC parcel\n");
             break; default:
-                printf(WARN": invalid resp_kind: %d\n", resp_kind);
+                printf(WARN": invalid parcel kind: %d\n", parcel_kind);
         }
     }
     
