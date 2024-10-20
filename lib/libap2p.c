@@ -1,3 +1,4 @@
+#include <cstddef>
 #include <time.h>
 #include <errno.h>
 #include <stdio.h>
@@ -17,7 +18,7 @@
 
 #define SQL_ERR_FMT "%s (%d)"
 #define SQL_ERR(db) sqlite3_errmsg((db)), sqlite3_errcode((db))
-#define NET_ERR_FMT "%s; %s"
+#define NET_ERR_FMT "at %s; %s"
 #define NET_ERR(addr) (addr), strerror(errno)
 
 #define FAILED_DB_OPEN_ERR_MSG ERROR": could not open database at '%s'\n", DB_FILE
@@ -111,6 +112,38 @@ typedef struct Connection {
     long updated_at;
     char status; // see ConnStatus
 } Connection;
+
+int send_parcel(unsigned char* parcel, unsigned long parcel_len, char* addr) {
+    if (parcel_len == 0) { return 0; }
+    
+    int peer_sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (peer_sock < 0) {
+        printf(ERROR": peer socket creation failed\n");
+        close(peer_sock);
+        return -1;
+    }
+    
+    struct sockaddr_in peer_sockaddr = {
+        .sin_family = AF_INET,
+        .sin_addr.s_addr = inet_addr(addr),
+        .sin_port = revbo_u16(DEFAULT_PORT),
+    };
+    if ( connect(peer_sock, (struct sockaddr*)&peer_sockaddr, sizeof(peer_sockaddr)) != 0 ) {
+        printf(WARN": could not connect "NET_ERR_FMT"\n", NET_ERR(addr));
+        close(peer_sock);
+        return -1;
+    }
+    
+    if ( send(peer_sock, parcel, parcel_len, 0) == parcel_len) {
+        printf(DEBUG": sent parcel of kind %d to %s\n", parcel[0], addr);
+    } else {
+        printf(WARN": could not send parcel "NET_ERR_FMT"\n", NET_ERR(addr));
+        close(peer_sock);
+        return -1;
+    }
+    
+    return 0;
+}
 
 int create_msg_table(sqlite3* db) {
     printf(INFO": creating Messages table\n");
@@ -344,47 +377,25 @@ int ap2p_request_connection(char* peer_addr) {
         sqlite3_close(db);
     } // end inserting the conn into the db
     
-    int peer_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (peer_sock < 0) {
-        printf(ERROR": peer socket creation failed; conn is pending\n");
-        goto exit_pending;
-    }
-    
-    { // attempt to communicate the conn req to the peer
-        struct sockaddr_in peer_sockaddr = {
-            .sin_family = AF_INET,
-            .sin_addr.s_addr = inet_addr(peer_addr),
-            .sin_port = revbo_u16(DEFAULT_PORT),
-        };
-        if ( connect(peer_sock, (struct sockaddr*)&peer_sockaddr, sizeof(peer_sockaddr)) != 0 ) {
-            printf(WARN": could not connect to peer at "NET_ERR_FMT"; conn is pending\n", NET_ERR(peer_addr));
-            goto exit_pending;
-        }
+    char self_name[MAX_HOST_NAME];
+    cpy_self_name(self_name);
+    unsigned char parcel[PARCEL_CONN_REQ_LEN] = {0};
+    {
+        parcel[0] = PARCEL_CONN_REQ_KIND;
         
-        char self_name[MAX_HOST_NAME];
-        cpy_self_name(self_name);
-        unsigned char parcel[PARCEL_CONN_REQ_LEN] = {0};
-        {
-            parcel[0] = PARCEL_CONN_REQ_KIND;
-            
-            for (int i=1;i<=8;i++) {
-                parcel[i] = (peer_id >> (8*(8-i))) & 0xFF;
-            }
+        for (int i=1;i<=8;i++) {
+            parcel[i] = (peer_id >> (8*(8-i))) & 0xFF;
+        }
 
-            strncpy((char*)parcel+9, self_name, MAX_HOST_NAME);
-        }
-        printf(DEBUG": sending conn req parcel to peer at %s with [peer_id: %ld, self_name: '%s']\n", peer_addr, peer_id, self_name);
-        if ( send(peer_sock, parcel, PARCEL_CONN_REQ_LEN, 0) > 0) {
-            printf(INFO": sent connection request to peer at %s\n", peer_addr);
-        } else {
-            printf(WARN": could not send parcel to peer at "NET_ERR_FMT"; conn is pending\n", NET_ERR(peer_addr));
-        }
-    } // end attempt to communicate the conn to the peer
-       
-    exit_pending:
-        close(peer_sock);
-        return 0;
-        
+        strncpy((char*)parcel+9, self_name, MAX_HOST_NAME);
+    }
+    if ( send_parcel(parcel, PARCEL_CONN_REQ_LEN, peer_addr) == 0 ) {
+        printf(INFO": sent connection request to peer at %s; connection is awaiting acknowledgement\n", peer_addr);
+    } else {
+        printf(INFO": could not send connection request to peer at %s; \x1b[33mconnection is pending\x1b[0m\n", peer_addr);
+    }
+    return 0;
+    
     exit_err_db:
         sqlite3_close(db);
     exit_err:
@@ -480,49 +491,28 @@ int ap2p_accept_connection(long conn_id) {
         sqlite3_finalize(update_stmt);
     } // end update conn in db
     
-    int peer_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (peer_sock < 0) {
-        printf(ERROR": peer socket creation failed\n");
-        goto exit_err_net;
-    }
-    { // communicate the acceptance to the peer
-        struct sockaddr_in peer_sockaddr = {
-            .sin_family = AF_INET,
-            .sin_addr.s_addr = inet_addr(peer_addr),
-            .sin_port = revbo_u16(DEFAULT_PORT),
-        };
-        if ( connect(peer_sock, (struct sockaddr*)&peer_sockaddr, sizeof(peer_sockaddr)) != 0 ) {
-            printf(WARN": could not connect to peer at "NET_ERR_FMT"\n", NET_ERR(peer_addr));
-            goto exit_err_net;
-        }
-        printf(INFO": connected to peer at %s\n", peer_addr);
+    unsigned char parcel[PARCEL_CONN_ACC_LEN] = {0};
+    {
+        parcel[0] = PARCEL_CONN_ACC_KIND;
         
-        unsigned char parcel[PARCEL_CONN_ACC_LEN] = {0};
-        {
-            parcel[0] = PARCEL_CONN_ACC_KIND;
-            
-            for (int i=1;i<=8;i++) {
-                parcel[i] = (self_id >> (8*(8-i))) & 0xFF;
-            }
-            
-            for (int i=9;i<=16;i++) {
-                parcel[i] = (peer_id >> (8*(8-i))) & 0xFF;
-            }
+        for (int i=1;i<=8;i++) {
+            parcel[i] = (self_id >> (8*(8-i))) & 0xFF;
+        }
+        
+        for (int i=9;i<=16;i++) {
+            parcel[i] = (peer_id >> (8*(8-i))) & 0xFF;
+        }
 
-            strncpy((char*)parcel+17, self_name, MAX_HOST_NAME);
-        }
-        if ( send(peer_sock, parcel, PARCEL_CONN_ACC_LEN, 0) < 0) {
-            printf(WARN": could not send parcel to peer at "NET_ERR_FMT"\n", NET_ERR(peer_addr));
-            goto exit_err_net;
-        }
-        printf(DEBUG": sent acc parcel to peer at %s with [self_id: %ld, peer_id: %ld, self_name: '%s']\n", peer_addr, self_id, peer_id, self_name);
-    } // end communicate the acceptance to the peer
-    
+        strncpy((char*)parcel+17, self_name, MAX_HOST_NAME);
+    }
+    if ( send_parcel(parcel, PARCEL_CONN_ACC_LEN, peer_addr) == 0 ) {
+        printf(INFO": accepted connection request from peer at %s", peer_addr);
+    } else {
+        printf(INFO": marked connection request from peer at %s as accepted, \x1b[33mbut\x1b[0m could not communicate it to the peer", peer_addr);
+    }
     sqlite3_close(db);
     return 0;
     
-    exit_err_net:
-        close(peer_sock);
     exit_err_db:
         sqlite3_close(db);
     exit_err:
@@ -672,40 +662,19 @@ int ap2p_listen() {
                 sqlite3_finalize(insert_stmt);
                 printf(DEBUG": inserted requested conn into the db, with self_id: %ld, peer_name: %s, peer_addr: %s\n", self_id, peer_name, incoming_addr_str);
                 
-                int peer_sock = socket(AF_INET, SOCK_STREAM, 0);
-                if (peer_sock < 0) {
-                    printf(ERROR": peer socket creation failed\n");
-                    close(peer_sock);
-                    goto exit_err_net;
-                }
-                { // communicate the ack to the peer
-                    struct sockaddr_in peer_sockaddr = {
-                        .sin_family = AF_INET,
-                        .sin_addr.s_addr = inet_addr(incoming_addr_str),
-                        .sin_port = revbo_u16(DEFAULT_PORT),
-                    };
-                    if ( connect(peer_sock, (struct sockaddr*)&peer_sockaddr, sizeof(peer_sockaddr)) != 0 ) {
-                        printf(WARN": could not connect to peer at "NET_ERR_FMT"\n", NET_ERR(incoming_addr_str));
-                        close(peer_sock);
-                        goto exit_err_net;
-                    }
-                    printf(INFO": connected to peer at %s\n", incoming_addr_str);
+                unsigned char resp_parcel[PARCEL_CONN_ACK_LEN] = {0};
+                {
+                    resp_parcel[0] = PARCEL_CONN_ACK_KIND;
                     
-                    unsigned char parcel[PARCEL_CONN_ACK_LEN] = {0};
-                    {
-                        parcel[0] = PARCEL_CONN_ACK_KIND;
-                        
-                        for (int i=1;i<=8;i++) {
-                            parcel[i] = (self_id >> (8*(8-i))) & 0xFF;
-                        }
+                    for (int i=1;i<=8;i++) {
+                        resp_parcel[i] = (self_id >> (8*(8-i))) & 0xFF;
                     }
-                    if ( send(peer_sock, parcel, PARCEL_CONN_ACK_LEN, 0) < 0) {
-                        printf(WARN": could not send parcel to peer at "NET_ERR_FMT"\n", NET_ERR(incoming_addr_str));
-                        close(peer_sock);
-                        goto exit_err_net;
-                    }
-                    printf(DEBUG": sent ack parcel to peer at %s with [self_id: %ld]\n", incoming_addr_str, self_id);
-                } // end communicate the ack to the peer
+                }
+                if ( send_parcel(resp_parcel, PARCEL_CONN_ACK_LEN, incoming_addr_str) == 0 ) {
+                    printf(INFO": acknowledged connection request from peer at %s\n", incoming_addr_str);
+                } else {
+                    printf(WARN": failed to acknowledge connection request from peer at %s\n", incoming_addr_str);
+                }
                 
             break; case PARCEL_CONN_ACK_KIND:
                 printf(INFO": recieved a CONN_ACK parcel\n");
