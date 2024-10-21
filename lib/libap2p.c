@@ -1,4 +1,3 @@
-#include <cstddef>
 #include <time.h>
 #include <errno.h>
 #include <stdio.h>
@@ -50,6 +49,16 @@
 #define revbo_u16(d) ( ((d&0xff)<<8)|(d>>8) )
 
 #define startswith(str, pat) (strncmp((str), (pat), strlen((pat))) == 0)
+
+#define pack_long(buf, d)             \
+for (int i=0;i<8;i++) {               \
+    (buf)[i] = ((d) >> (8*(8-i))) & 0xFF; \
+}
+
+#define unpack_long(d, buf) \
+for (int i=0;i<8;i++) { \
+    (d) = ((d) << 8) + (buf)[i]; \
+}
 
 long generate_id() {
     // TODO: more sophisticated peer_id generation
@@ -379,16 +388,12 @@ int ap2p_request_connection(char* peer_addr) {
     
     char self_name[MAX_HOST_NAME];
     cpy_self_name(self_name);
+    
     unsigned char parcel[PARCEL_CONN_REQ_LEN] = {0};
-    {
-        parcel[0] = PARCEL_CONN_REQ_KIND;
-        
-        for (int i=1;i<=8;i++) {
-            parcel[i] = (peer_id >> (8*(8-i))) & 0xFF;
-        }
-
-        strncpy((char*)parcel+9, self_name, MAX_HOST_NAME);
-    }
+    parcel[0] = PARCEL_CONN_REQ_KIND;
+    pack_long(parcel+1, peer_id);
+    strncpy((char*)parcel+9, self_name, MAX_HOST_NAME);
+    
     if ( send_parcel(parcel, PARCEL_CONN_REQ_LEN, peer_addr) == 0 ) {
         printf(INFO": sent connection request to peer at %s; connection is awaiting acknowledgement\n", peer_addr);
     } else {
@@ -492,19 +497,11 @@ int ap2p_accept_connection(long conn_id) {
     } // end update conn in db
     
     unsigned char parcel[PARCEL_CONN_ACC_LEN] = {0};
-    {
-        parcel[0] = PARCEL_CONN_ACC_KIND;
+    parcel[0] = PARCEL_CONN_ACC_KIND;
+    pack_long(parcel+1, self_id);
+    pack_long(parcel+9, peer_id);
+    strncpy((char*)parcel+17, self_name, MAX_HOST_NAME);
         
-        for (int i=1;i<=8;i++) {
-            parcel[i] = (self_id >> (8*(8-i))) & 0xFF;
-        }
-        
-        for (int i=9;i<=16;i++) {
-            parcel[i] = (peer_id >> (8*(8-i))) & 0xFF;
-        }
-
-        strncpy((char*)parcel+17, self_name, MAX_HOST_NAME);
-    }
     if ( send_parcel(parcel, PARCEL_CONN_ACC_LEN, peer_addr) == 0 ) {
         printf(INFO": accepted connection request from peer at %s", peer_addr);
     } else {
@@ -616,14 +613,11 @@ int ap2p_listen() {
                 }
 
                 long self_id = 0;
+                unpack_long(self_id, parcel);
+                
                 char peer_name[MAX_HOST_NAME] = {0};
-                {
-                    for (int i=0;i<8;i++) {
-                        self_id = (self_id << 8) + parcel[i];
-                    }
+                strncpy(peer_name, (char*)parcel+8, MAX_HOST_NAME);
 
-                    strncpy(peer_name, (char*)parcel+8, MAX_HOST_NAME);
-                }
                 printf(DEBUG": peer '%s' requested conn with self_id: %ld, \n", peer_name, self_id);
                 
                 sqlite3_stmt *insert_stmt;
@@ -663,13 +657,9 @@ int ap2p_listen() {
                 printf(DEBUG": inserted requested conn into the db, with self_id: %ld, peer_name: %s, peer_addr: %s\n", self_id, peer_name, incoming_addr_str);
                 
                 unsigned char resp_parcel[PARCEL_CONN_ACK_LEN] = {0};
-                {
-                    resp_parcel[0] = PARCEL_CONN_ACK_KIND;
-                    
-                    for (int i=1;i<=8;i++) {
-                        resp_parcel[i] = (self_id >> (8*(8-i))) & 0xFF;
-                    }
-                }
+                resp_parcel[0] = PARCEL_CONN_ACK_KIND;
+                pack_long(parcel+1, self_id);
+
                 if ( send_parcel(resp_parcel, PARCEL_CONN_ACK_LEN, incoming_addr_str) == 0 ) {
                     printf(INFO": acknowledged connection request from peer at %s\n", incoming_addr_str);
                 } else {
