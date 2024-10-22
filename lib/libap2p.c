@@ -21,9 +21,9 @@
 #define NET_ERR(addr) (addr), strerror(errno)
 
 #define FAILED_DB_OPEN_ERR_MSG ERROR": could not open database at '%s'\n", DB_FILE
-#define FAILED_STMT_PREPARE_ERR_MSG(stmt) ERROR": failed to prepare statement [%s]; "SQL_ERR_FMT"\n", sqlite3_sql((stmt)), SQL_ERR(db)
+#define FAILED_PREPARE_STMT_ERR_MSG(stmt) ERROR": failed to prepare statement [%s]; "SQL_ERR_FMT"\n", sqlite3_sql((stmt)), SQL_ERR(db)
 #define FAILED_STMT_STEP_ERR_MSG ERROR": failed while evaluating the statement; "SQL_ERR_FMT"\n", SQL_ERR(db)
-#define FAILED_PARAM_BIND_ERR_MSG(param_name) ERROR": failed to bind %s; "SQL_ERR_FMT"\n", (param_name), SQL_ERR(db)
+#define FAILED_PARAM_BIND_ERR_MSG ERROR": failed to bind parameters; "SQL_ERR_FMT"\n", SQL_ERR(db)
 
 #define DB_FILE "ap2p_storage.db"
 
@@ -349,28 +349,15 @@ int ap2p_request_connection(char* peer_addr) {
     }
     
     { // insert the conn into the db     
-        int res;
         sqlite3_stmt *insert_stmt;
         const char* insert_sql = "INSERT INTO Connections (peer_id, peer_addr) VALUES (?, ?);";
-        res = sqlite3_prepare_v2(db, insert_sql, -1, &insert_stmt, NULL);
-        if ( res != SQLITE_OK && startswith(sqlite3_errmsg(db), "no such table") ) {
-            if ( create_conn_table(db) == SQLITE_OK ) {
-                res = sqlite3_prepare_v2(db, insert_sql, -1, &insert_stmt, NULL);
-            } else {
-                goto exit_err_db;
-            }
-        }
-        if ( res != SQLITE_OK ) {
-            printf(FAILED_STMT_PREPARE_ERR_MSG(insert_stmt));
-            goto exit_err_db;
-        }
+        prepare_sql_statement(db, insert_stmt, insert_sql);
         
-        if ( (res = sqlite3_bind_int64(insert_stmt, 1, peer_id)) != SQLITE_OK ) {
-            printf(FAILED_PARAM_BIND_ERR_MSG("peer_id"));
-            goto exit_err_db;
-        }
-        if ( (res = sqlite3_bind_text(insert_stmt, 2, peer_addr, strlen(peer_addr), SQLITE_STATIC)) != SQLITE_OK ) {
-            printf(FAILED_PARAM_BIND_ERR_MSG("peer_addr"));
+        int bind_fail = 0;
+        bind_fail |= (sqlite3_bind_int64(insert_stmt, 1, peer_id) != SQLITE_OK);
+        bind_fail |= (sqlite3_bind_text(insert_stmt, 2, peer_addr, strlen(peer_addr), SQLITE_STATIC) != SQLITE_OK);
+        if ( bind_fail ) {
+            printf(FAILED_PARAM_BIND_ERR_MSG);
             goto exit_err_db;
         }
         
@@ -424,10 +411,9 @@ int ap2p_accept_connection(long conn_id) {
         prepare_sql_statement(db, select_stmt, select_sql);
         
         if ( (res = sqlite3_bind_int64(select_stmt, 1, conn_id)) != SQLITE_OK ) {
-            printf(FAILED_PARAM_BIND_ERR_MSG("conn_id"));
+            printf(FAILED_PARAM_BIND_ERR_MSG);
             goto exit_err_db;
         }
-        
         
         if ( (res = sqlite3_step(select_stmt)) == SQLITE_ROW ) {
             conn_status = sqlite3_column_int(select_stmt, 0);
@@ -461,16 +447,12 @@ int ap2p_accept_connection(long conn_id) {
             goto exit_err_db;
         }
         
-        if ( (res = sqlite3_bind_int64(update_stmt, 1, peer_id)) != SQLITE_OK ) {
-            printf(FAILED_PARAM_BIND_ERR_MSG("peer_id"));
-            goto exit_err_db;
-        }
-        if ( (res = sqlite3_bind_text(update_stmt, 2, self_name, strlen(self_name), SQLITE_STATIC)) != SQLITE_OK ) {
-            printf(FAILED_PARAM_BIND_ERR_MSG("self_name"));
-            goto exit_err_db;
-        }
-        if ( (res = sqlite3_bind_int64(update_stmt, 3, conn_id)) != SQLITE_OK ) {
-            printf(FAILED_PARAM_BIND_ERR_MSG("conn_id"));
+        int bind_fail = 0;
+        bind_fail |= (sqlite3_bind_int64(update_stmt, 1, peer_id) != SQLITE_OK);
+        bind_fail |= (sqlite3_bind_text(update_stmt, 2, self_name, strlen(self_name), SQLITE_STATIC) != SQLITE_OK);
+        bind_fail |= (sqlite3_bind_int64(update_stmt, 3, conn_id) != SQLITE_OK);
+        if ( bind_fail ) {
+            printf(FAILED_PARAM_BIND_ERR_MSG);
             goto exit_err_db;
         }
         
@@ -514,7 +496,7 @@ int ap2p_select_connection(long conn_id) {
     prepare_sql_statement(db, update_stmt, update_sql);
     
     if ( (res = sqlite3_bind_int64(update_stmt, 1, conn_id)) != SQLITE_OK ) {
-        printf(FAILED_PARAM_BIND_ERR_MSG("conn_id"));
+        printf(FAILED_PARAM_BIND_ERR_MSG);
         goto exit_err_db;
     }
         
@@ -598,20 +580,15 @@ int ap2p_listen() {
                 const char* insert_sql = "INSERT INTO Connections (self_id, peer_name, peer_addr, status) VALUES (?, ?, ?, 2);";
                 prepare_sql_statement(db, insert_stmt, insert_sql);
                 
-                if ( (res = sqlite3_bind_int64(insert_stmt, 1, self_id)) != SQLITE_OK ) {
-                    printf(FAILED_PARAM_BIND_ERR_MSG("self_id"));
-                    goto exit_err_db;
-                }
-                if ( (res = sqlite3_bind_text(insert_stmt, 2, peer_name, strlen(peer_name), SQLITE_STATIC)) != SQLITE_OK ) {
-                    printf(FAILED_PARAM_BIND_ERR_MSG("peer_name"));
-                    goto exit_err_db;
-                }
-                if ( (res = sqlite3_bind_text(insert_stmt, 3, incoming_addr_str, strlen(incoming_addr_str), SQLITE_STATIC)) != SQLITE_OK ) {
-                    printf(FAILED_PARAM_BIND_ERR_MSG("peer_addr"));
+                int bind_fail = 0;
+                bind_fail |= (sqlite3_bind_int64(insert_stmt, 1, self_id) != SQLITE_OK);
+                bind_fail |= (sqlite3_bind_text(insert_stmt, 2, peer_name, strlen(peer_name), SQLITE_STATIC) != SQLITE_OK);
+                bind_fail |= (sqlite3_bind_text(insert_stmt, 3, incoming_addr_str, strlen(incoming_addr_str), SQLITE_STATIC) != SQLITE_OK);
+                if ( bind_fail ) {
+                    printf(FAILED_PARAM_BIND_ERR_MSG);
                     goto exit_err_db;
                 }
                 
-                sqlite3_trace_v2(db, SQLITE_TRACE_STMT, trace_callback, NULL);
                 if ( sqlite3_step(insert_stmt) != SQLITE_DONE ) {
                     printf(FAILED_STMT_STEP_ERR_MSG);
                     goto exit_err_db;
