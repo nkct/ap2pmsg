@@ -214,6 +214,24 @@ typedef struct Message {
     const unsigned char* content;
 } Message;
 
+int prepare_sql_statement(sqlite3* db, sqlite3_stmt* stmt, const char* sql) {
+    int res;
+    res = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    if ( res != SQLITE_OK && startswith(sqlite3_errmsg(db), "no such table") ) {
+        if ( create_state_table(db) == SQLITE_OK ) {
+            res = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+        } else {
+            return -1;
+        }
+    }
+    if ( res != SQLITE_OK ) {
+        printf(FAILED_PREPARE_STMT_ERR_MSG(stmt));
+        return -1;
+    }
+    
+    return 0;
+}
+
 // non-zero on error
 int ap2p_list_connections(Connection* buf, int* buf_len) {
     sqlite3 *db;
@@ -225,18 +243,7 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
     int res;
     sqlite3_stmt *conn_stmt;
     const char* select_sql = "SELECT * FROM Connections;";
-    res = sqlite3_prepare_v2(db, select_sql, -1, &conn_stmt, NULL);
-    if ( res != SQLITE_OK && startswith(sqlite3_errmsg(db), "no such table") ) {
-        if ( create_conn_table(db) == SQLITE_OK ) {
-            res = sqlite3_prepare_v2(db, select_sql, -1, &conn_stmt, NULL);
-        } else {
-            goto exit_err_db;
-        }
-    }
-    if ( res != SQLITE_OK ) {
-        printf(FAILED_STMT_PREPARE_ERR_MSG(conn_stmt));
-        goto exit_err_db;
-    }
+    prepare_sql_statement(db, conn_stmt, select_sql);
     
     int row_count = 0;
     while ( (res = sqlite3_step(conn_stmt)) == SQLITE_ROW ) {
@@ -295,18 +302,7 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
     int res;
     sqlite3_stmt *msg_stmt;
     const char* select_sql = "SELECT * FROM Messages;";
-    res = sqlite3_prepare_v2(db, select_sql, -1, &msg_stmt, NULL);
-    if ( res != SQLITE_OK && startswith(sqlite3_errmsg(db), "no such table") ) {
-        if ( create_msg_table(db) == SQLITE_OK ) {
-            res = sqlite3_prepare_v2(db, select_sql, -1, &msg_stmt, NULL);
-        } else {
-            goto exit_err_db;
-        }
-    }
-    if ( res != SQLITE_OK ) {
-        printf(FAILED_STMT_PREPARE_ERR_MSG(msg_stmt));
-        goto exit_err_db;
-    }
+    prepare_sql_statement(db, msg_stmt, select_sql);
     
     int row_count = 0;
     while ( (res = sqlite3_step(msg_stmt)) == SQLITE_ROW ) {
@@ -425,18 +421,7 @@ int ap2p_accept_connection(long conn_id) {
     { // retrieve conn info from db
         sqlite3_stmt *select_stmt;
         const char* select_sql = "SELECT peer_addr, self_id FROM Connections WHERE conn_id=(?);";
-        res = sqlite3_prepare_v2(db, select_sql, -1, &select_stmt, NULL);
-        if ( res != SQLITE_OK && startswith(sqlite3_errmsg(db), "no such table") ) {
-            if ( create_conn_table(db) == SQLITE_OK ) {
-                res = sqlite3_prepare_v2(db, select_sql, -1, &select_stmt, NULL);
-            } else {
-                goto exit_err_db;
-            }
-        }
-        if ( res != SQLITE_OK ) {
-            printf(FAILED_STMT_PREPARE_ERR_MSG(select_stmt));
-            goto exit_err_db;
-        }
+        prepare_sql_statement(db, select_stmt, select_sql);
         
         if ( (res = sqlite3_bind_int64(select_stmt, 1, conn_id)) != SQLITE_OK ) {
             printf(FAILED_PARAM_BIND_ERR_MSG("conn_id"));
@@ -472,7 +457,7 @@ int ap2p_accept_connection(long conn_id) {
         "WHERE conn_id=(?);";
         // conn table must exist since we create it above if it doesn't
         if ( sqlite3_prepare_v2(db, update_sql, -1, &update_stmt, NULL) != SQLITE_OK ) {
-            printf(FAILED_STMT_PREPARE_ERR_MSG(update_stmt));
+            printf(FAILED_PREPARE_STMT_ERR_MSG(update_stmt));
             goto exit_err_db;
         }
         
@@ -526,18 +511,7 @@ int ap2p_select_connection(long conn_id) {
     int res;
     sqlite3_stmt *update_stmt;
     const char* update_sql = "UPDATE State SET value=(?) WHERE key='selected_conn';";
-    res = sqlite3_prepare_v2(db, update_sql, -1, &update_stmt, NULL);
-    if ( res != SQLITE_OK && startswith(sqlite3_errmsg(db), "no such table") ) {
-        if ( create_state_table(db) == SQLITE_OK ) {
-            res = sqlite3_prepare_v2(db, update_sql, -1, &update_stmt, NULL);
-        } else {
-            goto exit_err_db;
-        }
-    }
-    if ( res != SQLITE_OK ) {
-        printf(FAILED_STMT_PREPARE_ERR_MSG(update_stmt));
-        goto exit_err_db;
-    }
+    prepare_sql_statement(db, update_stmt, update_sql);
     
     if ( (res = sqlite3_bind_int64(update_stmt, 1, conn_id)) != SQLITE_OK ) {
         printf(FAILED_PARAM_BIND_ERR_MSG("conn_id"));
@@ -622,18 +596,7 @@ int ap2p_listen() {
                 
                 sqlite3_stmt *insert_stmt;
                 const char* insert_sql = "INSERT INTO Connections (self_id, peer_name, peer_addr, status) VALUES (?, ?, ?, 2);";
-                res = sqlite3_prepare_v2(db, insert_sql, -1, &insert_stmt, NULL);
-                if ( res != SQLITE_OK && startswith(sqlite3_errmsg(db), "no such table") ) {
-                    if ( create_conn_table(db) == SQLITE_OK ) {
-                        res = sqlite3_prepare_v2(db, insert_sql, -1, &insert_stmt, NULL);
-                    } else {
-                        goto exit_err_db;
-                    }
-                }
-                if ( res != SQLITE_OK ) {
-                    printf(FAILED_STMT_PREPARE_ERR_MSG(insert_stmt));
-                    goto exit_err_db;
-                }
+                prepare_sql_statement(db, insert_stmt, insert_sql);
                 
                 if ( (res = sqlite3_bind_int64(insert_stmt, 1, self_id)) != SQLITE_OK ) {
                     printf(FAILED_PARAM_BIND_ERR_MSG("self_id"));
