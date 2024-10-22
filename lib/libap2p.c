@@ -214,6 +214,20 @@ typedef struct Message {
     const unsigned char* content;
 } Message;
 
+int trace_callback(unsigned int T, void* C, void* P, void* X) {
+    printf(DEBUG": executing query: '%s'\n", sqlite3_expanded_sql(P));
+    return 0;
+}
+sqlite3* open_db() {
+    sqlite3* db;
+    if ( sqlite3_open(DB_FILE, &db) ) {
+        printf(FAILED_DB_OPEN_ERR_MSG);
+        return NULL;
+    }
+    sqlite3_trace_v2(db, SQLITE_TRACE_STMT, trace_callback, NULL);
+    
+    return db;
+}
 int prepare_sql_statement(sqlite3* db, sqlite3_stmt* stmt, const char* sql) {
     int res;
     res = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
@@ -234,11 +248,8 @@ int prepare_sql_statement(sqlite3* db, sqlite3_stmt* stmt, const char* sql) {
 
 // non-zero on error
 int ap2p_list_connections(Connection* buf, int* buf_len) {
-    sqlite3 *db;
-    if ( sqlite3_open(DB_FILE, &db) ) {
-        printf(FAILED_DB_OPEN_ERR_MSG);
-        goto exit_err;
-    }
+    sqlite3 *db = open_db();
+    if ( db == NULL ) { goto exit_err; }
     
     int res;
     sqlite3_stmt *conn_stmt;
@@ -292,12 +303,8 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
 
 // non-zero on error
 int ap2p_list_messages(Message* buf, int* buf_len) {
-    sqlite3 *db;
-    
-    if ( sqlite3_open(DB_FILE, &db) ) {
-        printf(FAILED_DB_OPEN_ERR_MSG);
-        goto exit_err;
-    }
+    sqlite3 *db = open_db();
+    if ( db == NULL ) { goto exit_err; }
     
     int res;
     sqlite3_stmt *msg_stmt;
@@ -342,11 +349,8 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
 int ap2p_request_connection(char* peer_addr) {
     long peer_id = generate_id();
     
-    sqlite3 *db;
-    if ( sqlite3_open(DB_FILE, &db) ) {
-        printf(FAILED_DB_OPEN_ERR_MSG);
-        goto exit_err;
-    }
+    sqlite3 *db = open_db();
+    if ( db == NULL ) { goto exit_err; }
     
     { // insert the conn into the db     
         sqlite3_stmt *insert_stmt;
@@ -400,11 +404,8 @@ int ap2p_accept_connection(long conn_id) {
     cpy_self_name(self_name);
     
     int res;
-    sqlite3 *db;
-    if ( sqlite3_open(DB_FILE, &db) ) {
-        printf(FAILED_DB_OPEN_ERR_MSG);
-        goto exit_err;
-    }
+    sqlite3 *db = open_db();
+    if ( db == NULL ) { goto exit_err; }
     { // retrieve conn info from db
         sqlite3_stmt *select_stmt;
         const char* select_sql = "SELECT peer_addr, self_id FROM Connections WHERE conn_id=(?);";
@@ -484,11 +485,8 @@ int ap2p_accept_connection(long conn_id) {
 }
 
 int ap2p_select_connection(long conn_id) {
-    sqlite3 *db;
-    if ( sqlite3_open(DB_FILE, &db) ) {
-        printf(FAILED_DB_OPEN_ERR_MSG);
-        goto exit_err;
-    }
+    sqlite3 *db = open_db();
+    if ( db == NULL ) { goto exit_err; }
     
     int res;
     sqlite3_stmt *update_stmt;
@@ -515,17 +513,10 @@ int ap2p_select_connection(long conn_id) {
         return -1;
 }
 
-int trace_callback(unsigned int T, void* C, void* P, void* X) {
-    printf("traced sql: %s\n", sqlite3_expanded_sql(P));
-    return 0;
-}
 int ap2p_listen() {
     int res;
-    sqlite3 *db;
-    if ( sqlite3_open(DB_FILE, &db) ) {
-        printf(FAILED_DB_OPEN_ERR_MSG);
-        goto exit_err;
-    }
+    sqlite3 *db = open_db();
+    if ( db == NULL ) { goto exit_err; }
     
     int listening_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (listening_sock < 0) {
