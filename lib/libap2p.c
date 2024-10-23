@@ -548,22 +548,24 @@ int ap2p_listen() {
         inet_ntop(AF_INET, &incoming_addr.sin_addr, incoming_addr_str, 15);
         
         char parcel_kind;
-        recv(incoming_sock, &parcel_kind, 1, 0);
+        // note that we only peek at parcel_kind without consuming the first byte
+        // this makes parcel reading simpler as there's no need to offset PARCEL_LEN by one
+        recv(incoming_sock, &parcel_kind, 1, MSG_PEEK);
         printf(DEBUG": conn from %s:%d with kind: %d\n", incoming_addr_str, incoming_addr.sin_port, parcel_kind);
         
         switch (parcel_kind) {
             break; case PARCEL_CONN_REQ_KIND:
                 printf(INFO": recieved a CONN_REQ parcel\n");
-                unsigned char parcel[PARCEL_CONN_REQ_LEN-1];
-                if (recv(incoming_sock, &parcel, PARCEL_CONN_REQ_LEN-1, 0) < PARCEL_CONN_REQ_LEN-1) {
+                unsigned char parcel[PARCEL_CONN_REQ_LEN];
+                if (recv(incoming_sock, &parcel, PARCEL_CONN_REQ_LEN, 0) < PARCEL_CONN_REQ_LEN) {
                     printf(WARN": could not read parcel contents\n");
                 }
 
                 long self_id = 0;
-                unpack_long(self_id, parcel);
+                unpack_long(self_id, parcel+1);
                 
                 char peer_name[MAX_HOST_NAME] = {0};
-                strncpy(peer_name, (char*)parcel+8, MAX_HOST_NAME);
+                strncpy(peer_name, (char*)parcel+9, MAX_HOST_NAME);
 
                 printf(DEBUG": peer '%s' requested conn with self_id: %ld, \n", peer_name, self_id);
                 
