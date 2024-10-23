@@ -32,7 +32,7 @@
 
 #define MAX_HOST_NAME 64 // in bytes
 
-// self and peer ids are from the perspective of the sender
+// IDs and names are from the perspective of the sender
 #define PARCEL_CONN_REQ_KIND 1 // request conn
 #define PARCEL_CONN_REQ_LEN 73 // kind[1] + peer_id[8] + self_name[64]
 
@@ -104,7 +104,7 @@ typedef enum ConnStatus {
     rejected    = -1, // the peer has reviewed this connection request and rejected it
     accepted    =  0, // this connection has been accepted and can be used to send and recieve messages
     pending     =  1, // the peer has not yet recieved this connection request
-    self_review =  2, // this connection has been requested of you, you can resolve (reject or accept), it
+    self_review =  2, // this connection has been requested of you, you can resolve (reject or accept) it
     peer_review =  3, // the peer has recieved this connections request, but not yet resolved it
 } ConnStatus;
 
@@ -554,7 +554,7 @@ int ap2p_listen() {
         printf(DEBUG": conn from %s:%d with kind: %d\n", incoming_addr_str, incoming_addr.sin_port, parcel_kind);
         
         switch (parcel_kind) {
-            break; case PARCEL_CONN_REQ_KIND:
+            break; case PARCEL_CONN_REQ_KIND: {
                 printf(INFO": recieved a CONN_REQ parcel\n");
                 unsigned char parcel[PARCEL_CONN_REQ_LEN];
                 if (recv(incoming_sock, &parcel, PARCEL_CONN_REQ_LEN, 0) < PARCEL_CONN_REQ_LEN) {
@@ -599,13 +599,39 @@ int ap2p_listen() {
                     printf(WARN": failed to acknowledge connection request from peer at %s\n", incoming_addr_str);
                 }
                 
-            break; case PARCEL_CONN_ACK_KIND:
+            } break; case PARCEL_CONN_ACK_KIND: {
                 printf(INFO": recieved a CONN_ACK parcel\n");
-            break; case PARCEL_CONN_REJ_KIND:
+                unsigned char parcel[PARCEL_CONN_ACK_LEN];
+                if (recv(incoming_sock, &parcel, PARCEL_CONN_ACK_LEN, 0) < PARCEL_CONN_ACK_LEN) {
+                    printf(WARN": could not read parcel contents\n");
+                }
+
+                long peer_id = 0;
+                unpack_long(peer_id, parcel+1);
+
+                printf(DEBUG": peer with ID %ld acked conn req\n", peer_id);
+                
+                sqlite3_stmt *update_stmt;
+                const char* update_sql = "UPDATE State SET status=3 WHERE peer_id=(?);";
+                prepare_sql_statement(db, update_stmt, update_sql);
+                
+                if ( sqlite3_bind_int64(update_stmt, 1, peer_id) != SQLITE_OK ) {
+                    printf(FAILED_PARAM_BIND_ERR_MSG);
+                    goto exit_err_db;
+                }
+                
+                if ( sqlite3_step(update_stmt) != SQLITE_DONE ) {
+                    printf(FAILED_STMT_STEP_ERR_MSG);
+                    goto exit_err_db;
+                }
+                sqlite3_finalize(update_stmt);
+                printf(DEBUG": updated conn to 'awaiting peer review' where peer_id=%ld\n", peer_id);
+                
+            } break; case PARCEL_CONN_REJ_KIND: {
                 printf(INFO": recieved a CONN_REJ parcel\n");
-            break; case PARCEL_CONN_ACC_KIND:
+            } break; case PARCEL_CONN_ACC_KIND: {
                 printf(INFO": recieved a CONN_ACC parcel\n");
-            break; default:
+            } break; default:
                 printf(WARN": invalid parcel kind: %d\n", parcel_kind);
         }
     }
