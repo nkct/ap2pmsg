@@ -21,7 +21,7 @@
 #define NET_ERR(addr) (addr), strerror(errno)
 
 #define FAILED_DB_OPEN_ERR_MSG ERROR": could not open database at '%s'\n", DB_FILE
-#define FAILED_PREPARE_STMT_ERR_MSG(stmt) ERROR": failed to prepare statement [%s]; "SQL_ERR_FMT"\n", sqlite3_sql((stmt)), SQL_ERR(db)
+#define FAILED_PREPARE_STMT_ERR_MSG(stmt) ERROR": failed to prepare statement [%s]; "SQL_ERR_FMT"\n", sqlite3_sql((*stmt)), SQL_ERR(db)
 #define FAILED_STMT_STEP_ERR_MSG ERROR": failed while evaluating the statement; "SQL_ERR_FMT"\n", SQL_ERR(db)
 #define FAILED_PARAM_BIND_ERR_MSG ERROR": failed to bind parameters; "SQL_ERR_FMT"\n", SQL_ERR(db)
 
@@ -228,12 +228,12 @@ sqlite3* open_db() {
     
     return db;
 }
-int prepare_sql_statement(sqlite3* db, sqlite3_stmt* stmt, const char* sql) {
+int prepare_sql_statement(sqlite3* db, sqlite3_stmt** stmt, const char* sql, int create_table(sqlite3*)) {
     int res;
-    res = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    res = sqlite3_prepare_v2(db, sql, -1, stmt, NULL);
     if ( res != SQLITE_OK && startswith(sqlite3_errmsg(db), "no such table") ) {
-        if ( create_state_table(db) == SQLITE_OK ) {
-            res = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+        if ( create_table(db) == SQLITE_OK ) {
+            res = sqlite3_prepare_v2(db, sql, -1, stmt, NULL);
         } else {
             return -1;
         }
@@ -252,9 +252,9 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
     if ( db == NULL ) { goto exit_err; }
     
     int res;
-    sqlite3_stmt *conn_stmt;
+    sqlite3_stmt* conn_stmt;
     const char* select_sql = "SELECT * FROM Connections;";
-    prepare_sql_statement(db, conn_stmt, select_sql);
+    prepare_sql_statement(db, &conn_stmt, select_sql, &create_conn_table);
     
     int row_count = 0;
     while ( (res = sqlite3_step(conn_stmt)) == SQLITE_ROW ) {
@@ -309,7 +309,7 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
     int res;
     sqlite3_stmt *msg_stmt;
     const char* select_sql = "SELECT * FROM Messages;";
-    prepare_sql_statement(db, msg_stmt, select_sql);
+    prepare_sql_statement(db, &msg_stmt, select_sql, &create_msg_table);
     
     int row_count = 0;
     while ( (res = sqlite3_step(msg_stmt)) == SQLITE_ROW ) {
@@ -355,7 +355,7 @@ int ap2p_request_connection(char* peer_addr) {
     { // insert the conn into the db     
         sqlite3_stmt *insert_stmt;
         const char* insert_sql = "INSERT INTO Connections (peer_id, peer_addr) VALUES (?, ?);";
-        prepare_sql_statement(db, insert_stmt, insert_sql);
+        prepare_sql_statement(db, &insert_stmt, insert_sql, &create_conn_table);
         
         int bind_fail = 0;
         bind_fail |= (sqlite3_bind_int64(insert_stmt, 1, peer_id) != SQLITE_OK);
@@ -394,14 +394,11 @@ int ap2p_request_connection(char* peer_addr) {
         return -1;
 }
 
-int ap2p_accept_connection(long conn_id) {
+// decision: 0 for acc, non-zero for rej
+int ap2p_decide_on_connection(long conn_id, int decision) {
     char* peer_addr;
     long self_id;
     int conn_status;
-    
-    long peer_id = generate_id();
-    char self_name[MAX_HOST_NAME];
-    cpy_self_name(self_name);
     
     int res;
     sqlite3 *db = open_db();
@@ -409,7 +406,7 @@ int ap2p_accept_connection(long conn_id) {
     { // retrieve conn info from db
         sqlite3_stmt *select_stmt;
         const char* select_sql = "SELECT peer_addr, self_id FROM Connections WHERE conn_id=(?);";
-        prepare_sql_statement(db, select_stmt, select_sql);
+        prepare_sql_statement(db, &select_stmt, select_sql, &create_conn_table);
         
         if ( (res = sqlite3_bind_int64(select_stmt, 1, conn_id)) != SQLITE_OK ) {
             printf(FAILED_PARAM_BIND_ERR_MSG);
@@ -432,49 +429,82 @@ int ap2p_accept_connection(long conn_id) {
     } // end retrieve conn info from db
     
     if (conn_status != self_review) {
-        printf(ERROR": attempted to accept a connection which wasn't awaiting review, conn status: (%c)\n", conn_status);
+        printf(ERROR": attempted to decide on a connection which wasn't awaiting review, conn status: (%c)\n", conn_status);
         goto exit_err_db;
     }
     
-    { // update conn in db
-        sqlite3_stmt *update_stmt;
-        const char* update_sql = ""
-        "UPDATE Connections "
-        "SET updated_at=(strftime('%s', 'now')), peer_id=(?), self_name=(?), status=0 "
-        "WHERE conn_id=(?);";
-        // conn table must exist since we create it above if it doesn't
-        if ( sqlite3_prepare_v2(db, update_sql, -1, &update_stmt, NULL) != SQLITE_OK ) {
-            printf(FAILED_PREPARE_STMT_ERR_MSG(update_stmt));
-            goto exit_err_db;
-        }
+    if ( decision != 0 ) { // rejected
+        { // update conn in db
+            sqlite3_stmt *update_stmt;
+            const char* update_sql = ""
+            "UPDATE Connections "
+            "SET updated_at=(strftime('%s', 'now')), status=-1 "
+            "WHERE conn_id=(?);";
+            prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table);
+            
+            if ( sqlite3_bind_int64(update_stmt, 1, conn_id) != SQLITE_OK ) {
+                printf(FAILED_PARAM_BIND_ERR_MSG);
+                goto exit_err_db;
+            }
+            
+            if ( sqlite3_step(update_stmt) != SQLITE_DONE ) {
+                printf(FAILED_STMT_STEP_ERR_MSG);
+                goto exit_err_db;
+            }
+            sqlite3_finalize(update_stmt);
+        } // end update conn in db
         
-        int bind_fail = 0;
-        bind_fail |= (sqlite3_bind_int64(update_stmt, 1, peer_id) != SQLITE_OK);
-        bind_fail |= (sqlite3_bind_text(update_stmt, 2, self_name, strlen(self_name), SQLITE_STATIC) != SQLITE_OK);
-        bind_fail |= (sqlite3_bind_int64(update_stmt, 3, conn_id) != SQLITE_OK);
-        if ( bind_fail ) {
-            printf(FAILED_PARAM_BIND_ERR_MSG);
-            goto exit_err_db;
+        unsigned char parcel[PARCEL_CONN_REJ_LEN] = {0};
+        parcel[0] = PARCEL_CONN_REJ_KIND;
+        pack_long(parcel+1, self_id);
+            
+        if ( send_parcel(parcel, PARCEL_CONN_ACC_LEN, peer_addr) == 0 ) {
+            printf(INFO": rejected connection request from peer at %s", peer_addr);
+        } else {
+            printf(INFO": marked connection request from peer at %s as rejected, \x1b[33mbut\x1b[0m could not communicate it to the peer", peer_addr);
         }
+    } else { // accepted
+        long peer_id = generate_id();
+        char self_name[MAX_HOST_NAME];
+        cpy_self_name(self_name);
         
-        if ( sqlite3_step(update_stmt) != SQLITE_DONE ) {
-            printf(FAILED_STMT_STEP_ERR_MSG);
-            goto exit_err_db;
+        { // update conn in db
+            sqlite3_stmt *update_stmt;
+            const char* update_sql = ""
+            "UPDATE Connections "
+            "SET updated_at=(strftime('%s', 'now')), peer_id=(?), self_name=(?), status=0 "
+            "WHERE conn_id=(?);";
+            prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table);
+            
+            int bind_fail = 0;
+            bind_fail |= (sqlite3_bind_int64(update_stmt, 1, peer_id) != SQLITE_OK);
+            bind_fail |= (sqlite3_bind_text(update_stmt, 2, self_name, strlen(self_name), SQLITE_STATIC) != SQLITE_OK);
+            bind_fail |= (sqlite3_bind_int64(update_stmt, 3, conn_id) != SQLITE_OK);
+            if ( bind_fail ) {
+                printf(FAILED_PARAM_BIND_ERR_MSG);
+                goto exit_err_db;
+            }
+            
+            if ( sqlite3_step(update_stmt) != SQLITE_DONE ) {
+                printf(FAILED_STMT_STEP_ERR_MSG);
+                goto exit_err_db;
+            }
+            sqlite3_finalize(update_stmt);
+        } // end update conn in db
+        
+        unsigned char parcel[PARCEL_CONN_ACC_LEN] = {0};
+        parcel[0] = PARCEL_CONN_ACC_KIND;
+        pack_long(parcel+1, self_id);
+        pack_long(parcel+9, peer_id);
+        strncpy((char*)parcel+17, self_name, MAX_HOST_NAME);
+            
+        if ( send_parcel(parcel, PARCEL_CONN_ACC_LEN, peer_addr) == 0 ) {
+            printf(INFO": accepted connection request from peer at %s", peer_addr);
+        } else {
+            printf(INFO": marked connection request from peer at %s as accepted, \x1b[33mbut\x1b[0m could not communicate it to the peer", peer_addr);
         }
-        sqlite3_finalize(update_stmt);
-    } // end update conn in db
-    
-    unsigned char parcel[PARCEL_CONN_ACC_LEN] = {0};
-    parcel[0] = PARCEL_CONN_ACC_KIND;
-    pack_long(parcel+1, self_id);
-    pack_long(parcel+9, peer_id);
-    strncpy((char*)parcel+17, self_name, MAX_HOST_NAME);
-        
-    if ( send_parcel(parcel, PARCEL_CONN_ACC_LEN, peer_addr) == 0 ) {
-        printf(INFO": accepted connection request from peer at %s", peer_addr);
-    } else {
-        printf(INFO": marked connection request from peer at %s as accepted, \x1b[33mbut\x1b[0m could not communicate it to the peer", peer_addr);
     }
+    
     sqlite3_close(db);
     return 0;
     
@@ -491,7 +521,7 @@ int ap2p_select_connection(long conn_id) {
     int res;
     sqlite3_stmt *update_stmt;
     const char* update_sql = "UPDATE State SET value=(?) WHERE key='selected_conn';";
-    prepare_sql_statement(db, update_stmt, update_sql);
+    prepare_sql_statement(db, &update_stmt, update_sql, &create_state_table);
     
     if ( (res = sqlite3_bind_int64(update_stmt, 1, conn_id)) != SQLITE_OK ) {
         printf(FAILED_PARAM_BIND_ERR_MSG);
@@ -571,7 +601,7 @@ int ap2p_listen() {
                 
                 sqlite3_stmt *insert_stmt;
                 const char* insert_sql = "INSERT INTO Connections (self_id, peer_name, peer_addr, status) VALUES (?, ?, ?, 2);";
-                prepare_sql_statement(db, insert_stmt, insert_sql);
+                prepare_sql_statement(db, &insert_stmt, insert_sql, &create_conn_table);
                 
                 int bind_fail = 0;
                 bind_fail |= (sqlite3_bind_int64(insert_stmt, 1, self_id) != SQLITE_OK);
@@ -612,8 +642,8 @@ int ap2p_listen() {
                 printf(DEBUG": peer with ID %ld acked conn req\n", peer_id);
                 
                 sqlite3_stmt *update_stmt;
-                const char* update_sql = "UPDATE State SET status=3 WHERE peer_id=(?);";
-                prepare_sql_statement(db, update_stmt, update_sql);
+                const char* update_sql = "UPDATE Connections SET status=3 WHERE peer_id=(?);";
+                prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table);
                 
                 if ( sqlite3_bind_int64(update_stmt, 1, peer_id) != SQLITE_OK ) {
                     printf(FAILED_PARAM_BIND_ERR_MSG);

@@ -88,13 +88,14 @@ fn main() -> Result<(), isize> {
                         println!("ID: {id}");
                         let res;
                         match next_arg()?.as_str() {
-                            "y" | "yes" | "a" | "acc" | "accept" => { res = libap2p::accept_connection(id); }
-                            "n" | "no"  | "r" | "rej" | "reject" => { res = libap2p::reject_connection(id);}
+                            "y" | "yes" | "a" | "acc" | "accept" => { res = libap2p::decide_on_connection(id, 0); }
+                            "n" | "no"  | "r" | "rej" | "reject" => { res = libap2p::decide_on_connection(id, -1);}
                             _ => {
                                 log!("ERROR: <DECISION> must be either [\"y\", \"yes\", \"a\", \"acc\", \"accept\"] or [\"n\", \"no\", \"r\", \"rej\", \"reject\"]");
                                 return Err(-1);
                             }
                         }
+                        println!("decide_on_connection result: {res}"); 
                     }
                 }
                 subcommand => {
@@ -132,7 +133,7 @@ fn main() -> Result<(), isize> {
             let res = libap2p::listen();
             println!("Finished listening with {}", res);
         }
-        "help" | "-h"    | "--help"                     => { 
+        "h" | "help" | "-h"    | "--help"                     => { 
             println!("Usage: {prog_path} [conn | conns | connection | connections] [l | -l | list    | --list   ]");
             print!("{}", " ".repeat(50 + prog_path.len()));              println!("[s | -s | select  | --select ] <ID>");
             print!("{}", " ".repeat(50 + prog_path.len()));              println!("[r | -r | request | --request] <ADDR>");
@@ -143,7 +144,7 @@ fn main() -> Result<(), isize> {
             print!("{}", " ".repeat(50 + prog_path.len()));              println!("[b | -b | bulk  | --bulk ] <MSGS>");
             println!();
             println!("       {prog_path} [help | -h    | --help   ]");
-            println!("       └─▸ Print this message and exit.");
+            println!("       └─> Print this message and exit.");
         }
         _ => {
             log!("ERROR: '{command}' is not a recognized command, see `{prog_path} help` for usage info");

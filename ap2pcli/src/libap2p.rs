@@ -10,8 +10,7 @@ extern "C" {
     fn ap2p_list_messages(buf: *const Message, buf_len: &i32) -> i32;
     fn ap2p_request_connection(addr: *const u8) -> i32;
     fn ap2p_select_connection(conn_id: u64) -> i32;
-    fn ap2p_accept_connection(conn_id: u64) -> i32;
-    fn ap2p_reject_connection(conn_id: u64) -> i32;
+    fn ap2p_decide_on_connection(conn_id: u64, decison: i32) -> i32;
     fn ap2p_listen() -> i32;
 }
 
@@ -107,12 +106,8 @@ pub fn select_connection(conn_id: u64) -> i32 {
     return unsafe { ap2p_select_connection(conn_id) }
 }
 
-pub fn accept_connection(conn_id: u64) -> i32 {
-    return unsafe { ap2p_accept_connection(conn_id) }
-}
-
-pub fn reject_connection(conn_id: u64) -> i32 {
-    return unsafe { ap2p_reject_connection(conn_id) }
+pub fn decide_on_connection(conn_id: u64, decision: i32) -> i32 {
+    return unsafe { ap2p_decide_on_connection(conn_id, decision) }
 }
 
 pub fn listen() -> i32 {
