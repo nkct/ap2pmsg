@@ -254,7 +254,9 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
     int res;
     sqlite3_stmt* conn_stmt;
     const char* select_sql = "SELECT * FROM Connections;";
-    prepare_sql_statement(db, &conn_stmt, select_sql, &create_conn_table);
+    if ( prepare_sql_statement(db, &conn_stmt, select_sql, &create_conn_table) ) {
+        goto exit_err_db;
+    }
     
     int row_count = 0;
     while ( (res = sqlite3_step(conn_stmt)) == SQLITE_ROW ) {
@@ -309,7 +311,9 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
     int res;
     sqlite3_stmt *msg_stmt;
     const char* select_sql = "SELECT * FROM Messages;";
-    prepare_sql_statement(db, &msg_stmt, select_sql, &create_msg_table);
+    if ( prepare_sql_statement(db, &msg_stmt, select_sql, &create_msg_table) ) {
+        goto exit_err_db;
+    }
     
     int row_count = 0;
     while ( (res = sqlite3_step(msg_stmt)) == SQLITE_ROW ) {
@@ -355,7 +359,9 @@ int ap2p_request_connection(char* peer_addr) {
     { // insert the conn into the db     
         sqlite3_stmt *insert_stmt;
         const char* insert_sql = "INSERT INTO Connections (peer_id, peer_addr) VALUES (?, ?);";
-        prepare_sql_statement(db, &insert_stmt, insert_sql, &create_conn_table);
+        if ( prepare_sql_statement(db, &insert_stmt, insert_sql, &create_conn_table) ) {
+            goto exit_err_db;
+        }
         
         int bind_fail = 0;
         bind_fail |= (sqlite3_bind_int64(insert_stmt, 1, peer_id) != SQLITE_OK);
@@ -406,7 +412,9 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
     { // retrieve conn info from db
         sqlite3_stmt *select_stmt;
         const char* select_sql = "SELECT peer_addr, self_id FROM Connections WHERE conn_id=(?);";
-        prepare_sql_statement(db, &select_stmt, select_sql, &create_conn_table);
+        if ( prepare_sql_statement(db, &select_stmt, select_sql, &create_conn_table) ) {
+            goto exit_err_db;
+        }
         
         if ( (res = sqlite3_bind_int64(select_stmt, 1, conn_id)) != SQLITE_OK ) {
             printf(FAILED_PARAM_BIND_ERR_MSG);
@@ -440,7 +448,9 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
             "UPDATE Connections "
             "SET updated_at=(strftime('%s', 'now')), status=-1 "
             "WHERE conn_id=(?);";
-            prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table);
+            if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) {
+                goto exit_err_db;
+            }
             
             if ( sqlite3_bind_int64(update_stmt, 1, conn_id) != SQLITE_OK ) {
                 printf(FAILED_PARAM_BIND_ERR_MSG);
@@ -474,7 +484,9 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
             "UPDATE Connections "
             "SET updated_at=(strftime('%s', 'now')), peer_id=(?), self_name=(?), status=0 "
             "WHERE conn_id=(?);";
-            prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table);
+            if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) {
+                goto exit_err_db;
+            }
             
             int bind_fail = 0;
             bind_fail |= (sqlite3_bind_int64(update_stmt, 1, peer_id) != SQLITE_OK);
@@ -521,7 +533,9 @@ int ap2p_select_connection(long conn_id) {
     int res;
     sqlite3_stmt *update_stmt;
     const char* update_sql = "UPDATE State SET value=(?) WHERE key='selected_conn';";
-    prepare_sql_statement(db, &update_stmt, update_sql, &create_state_table);
+    if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_state_table) ) {
+        goto exit_err_db;
+    }
     
     if ( (res = sqlite3_bind_int64(update_stmt, 1, conn_id)) != SQLITE_OK ) {
         printf(FAILED_PARAM_BIND_ERR_MSG);
@@ -601,7 +615,9 @@ int ap2p_listen() {
                 
                 sqlite3_stmt *insert_stmt;
                 const char* insert_sql = "INSERT INTO Connections (self_id, peer_name, peer_addr, status) VALUES (?, ?, ?, 2);";
-                prepare_sql_statement(db, &insert_stmt, insert_sql, &create_conn_table);
+                if ( prepare_sql_statement(db, &insert_stmt, insert_sql, &create_conn_table) ) {
+                    goto exit_err_db;
+                }
                 
                 int bind_fail = 0;
                 bind_fail |= (sqlite3_bind_int64(insert_stmt, 1, self_id) != SQLITE_OK);
@@ -643,7 +659,9 @@ int ap2p_listen() {
                 
                 sqlite3_stmt *update_stmt;
                 const char* update_sql = "UPDATE Connections SET status=3 WHERE peer_id=(?);";
-                prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table);
+                if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) {
+                    goto exit_err_db;
+                }
                 
                 if ( sqlite3_bind_int64(update_stmt, 1, peer_id) != SQLITE_OK ) {
                     printf(FAILED_PARAM_BIND_ERR_MSG);
