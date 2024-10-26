@@ -50,13 +50,13 @@
 
 #define startswith(str, pat) (strncmp((str), (pat), strlen((pat))) == 0)
 
-#define pack_long(buf, d)             \
-for (int i=0;i<8;i++) {               \
-    (buf)[i] = ((d) >> (8*(8-i))) & 0xFF; \
+#define pack_long(buf, d)                 \
+for (int i=0;i<8;i++) {                   \
+    (buf)[i] = ((d) >> (8*(7-i))) & 0xFF; \
 }
 
-#define unpack_long(d, buf) \
-for (int i=0;i<8;i++) { \
+#define unpack_long(d, buf)      \
+for (int i=0;i<8;i++) {          \
     (d) = ((d) << 8) + (buf)[i]; \
 }
 
@@ -125,6 +125,12 @@ typedef struct Connection {
 int send_parcel(unsigned char* parcel, unsigned long parcel_len, char* addr) {
     if (parcel_len == 0) { return 0; }
     
+    printf(DEBUG"parcel: [");
+    for (int i = 0; i<parcel_len; i++) {
+        printf("%d, ", parcel[i]);
+    }
+    printf("]\n");
+    
     int peer_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (peer_sock < 0) {
         printf(ERROR": peer socket creation failed\n");
@@ -150,6 +156,19 @@ int send_parcel(unsigned char* parcel, unsigned long parcel_len, char* addr) {
         close(peer_sock);
         return -1;
     }
+    
+    return 0;
+}
+int recv_parcel(int sock, unsigned char* parcel, unsigned long parcel_len) {
+    if (recv(sock, parcel, parcel_len, 0) < parcel_len) {
+        printf(WARN": could not read parcel contents\n");
+        return -1;
+    }
+    printf(DEBUG"parcel: [");
+    for (int i = 0; i<parcel_len; i++) {
+        printf("%d, ", parcel[i]);
+    }
+    printf("]\n");
     
     return 0;
 }
@@ -601,9 +620,7 @@ int ap2p_listen() {
             break; case PARCEL_CONN_REQ_KIND: {
                 printf(INFO": recieved a CONN_REQ parcel\n");
                 unsigned char parcel[PARCEL_CONN_REQ_LEN];
-                if (recv(incoming_sock, &parcel, PARCEL_CONN_REQ_LEN, 0) < PARCEL_CONN_REQ_LEN) {
-                    printf(WARN": could not read parcel contents\n");
-                }
+                if ( recv_parcel(incoming_sock, parcel, PARCEL_CONN_REQ_LEN) ) { continue; }
 
                 long self_id = 0;
                 unpack_long(self_id, parcel+1);
