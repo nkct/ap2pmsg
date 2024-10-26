@@ -50,6 +50,8 @@
 
 #define startswith(str, pat) (strncmp((str), (pat), strlen((pat))) == 0)
 
+#define ap2p_log(...) fprintf(stderr, __VA_ARGS__)
+
 #define pack_long(buf, d)                 \
 for (int i=0;i<8;i++) {                   \
     (buf)[i] = ((d) >> (8*(7-i))) & 0xFF; \
@@ -73,7 +75,7 @@ void cpy_self_name(char* dst) {
 }
 
 int create_conn_table(sqlite3* db) {
-    printf(INFO": creating Connections table\n");
+    ap2p_log(INFO": creating Connections table\n");
     
     char* errmsg = 0;
     const char* create_conns_sql = ""
@@ -89,7 +91,7 @@ int create_conn_table(sqlite3* db) {
         "status INTEGER DEFAULT 1 NOT NULL" // see ConnStatus
     ");";
     if ( sqlite3_exec(db, create_conns_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
-        printf(ERROR": could not create the Connections table; %s\n", errmsg);
+        ap2p_log(ERROR": could not create the Connections table; %s\n", errmsg);
         sqlite3_free(errmsg);
         return -1;
     }
@@ -125,15 +127,15 @@ typedef struct Connection {
 int send_parcel(unsigned char* parcel, unsigned long parcel_len, char* addr) {
     if (parcel_len == 0) { return 0; }
     
-    printf(DEBUG"parcel: [");
+    ap2p_log(DEBUG": parcel: [");
     for (int i = 0; i<parcel_len; i++) {
-        printf("%d, ", parcel[i]);
+        ap2p_log("%d, ", parcel[i]);
     }
-    printf("]\n");
+    ap2p_log("]\n");
     
     int peer_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (peer_sock < 0) {
-        printf(ERROR": peer socket creation failed\n");
+        ap2p_log(ERROR": failed to create peer socket; %s\n", strerror(errno));
         close(peer_sock);
         return -1;
     }
@@ -144,15 +146,15 @@ int send_parcel(unsigned char* parcel, unsigned long parcel_len, char* addr) {
         .sin_port = revbo_u16(DEFAULT_PORT),
     };
     if ( connect(peer_sock, (struct sockaddr*)&peer_sockaddr, sizeof(peer_sockaddr)) != 0 ) {
-        printf(WARN": could not connect "NET_ERR_FMT"\n", NET_ERR(addr));
+        ap2p_log(WARN": could not connect "NET_ERR_FMT"\n", NET_ERR(addr));
         close(peer_sock);
         return -1;
     }
     
     if ( send(peer_sock, parcel, parcel_len, 0) == parcel_len) {
-        printf(DEBUG": sent parcel of kind %d to %s\n", parcel[0], addr);
+        ap2p_log(DEBUG": sent parcel of kind %d to %s\n", parcel[0], addr);
     } else {
-        printf(WARN": could not send parcel "NET_ERR_FMT"\n", NET_ERR(addr));
+        ap2p_log(WARN": could not send parcel "NET_ERR_FMT"\n", NET_ERR(addr));
         close(peer_sock);
         return -1;
     }
@@ -161,20 +163,20 @@ int send_parcel(unsigned char* parcel, unsigned long parcel_len, char* addr) {
 }
 int recv_parcel(int sock, unsigned char* parcel, unsigned long parcel_len) {
     if (recv(sock, parcel, parcel_len, 0) < parcel_len) {
-        printf(WARN": could not read parcel contents\n");
+        ap2p_log(WARN": could not read parcel contents; %s\n", strerror(errno));
         return -1;
     }
-    printf(DEBUG"parcel: [");
+    ap2p_log(DEBUG": parcel: [");
     for (int i = 0; i<parcel_len; i++) {
-        printf("%d, ", parcel[i]);
+        ap2p_log("%d, ", parcel[i]);
     }
-    printf("]\n");
+    ap2p_log("]\n");
     
     return 0;
 }
 
 int create_msg_table(sqlite3* db) {
-    printf(INFO": creating Messages table\n");
+    ap2p_log(INFO": creating Messages table\n");
     
     char* errmsg = 0;
     const char* create_msgs_sql = ""
@@ -188,7 +190,7 @@ int create_msg_table(sqlite3* db) {
         "FOREIGN KEY (conn_id) REFERENCES Connections(conn_id)"
     ");";
     if ( sqlite3_exec(db, create_msgs_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
-        printf(ERROR": could not create the Messages table; %s\n", errmsg);
+        ap2p_log(ERROR": could not create the Messages table; %s\n", errmsg);
         sqlite3_free(errmsg);
         return -1;
     }
@@ -196,7 +198,7 @@ int create_msg_table(sqlite3* db) {
 }
 
 int create_state_table(sqlite3* db) {
-    printf(INFO": creating State table\n");
+    ap2p_log(INFO": creating State table\n");
     
     char* errmsg = 0;
     const char* create_state_sql = ""
@@ -206,7 +208,7 @@ int create_state_table(sqlite3* db) {
         "value TEXT"
     ");";
     if ( sqlite3_exec(db, create_state_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
-        printf(ERROR": could not create the State table; %s\n", errmsg);
+        ap2p_log(ERROR": could not create the State table; %s\n", errmsg);
         sqlite3_free(errmsg);
         return -1;
     }
@@ -215,7 +217,7 @@ int create_state_table(sqlite3* db) {
         "('selected_conn', -1)"
     ";";
     if ( sqlite3_exec(db, default_state_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
-        printf(ERROR": could not insert dafaults into the State table; %s\n", errmsg);
+        ap2p_log(ERROR": could not insert dafaults into the State table; %s\n", errmsg);
         sqlite3_free(errmsg);
         return -1;
     }
@@ -234,13 +236,13 @@ typedef struct Message {
 } Message;
 
 int trace_callback(unsigned int T, void* C, void* P, void* X) {
-    printf(DEBUG": executing query: '%s'\n", sqlite3_expanded_sql(P));
+    ap2p_log(DEBUG": executing query: '%s'\n", sqlite3_expanded_sql(P));
     return 0;
 }
 sqlite3* open_db() {
     sqlite3* db;
     if ( sqlite3_open(DB_FILE, &db) ) {
-        printf(FAILED_DB_OPEN_ERR_MSG);
+        ap2p_log(FAILED_DB_OPEN_ERR_MSG);
         return NULL;
     }
     sqlite3_trace_v2(db, SQLITE_TRACE_STMT, trace_callback, NULL);
@@ -258,7 +260,7 @@ int prepare_sql_statement(sqlite3* db, sqlite3_stmt** stmt, const char* sql, int
         }
     }
     if ( res != SQLITE_OK ) {
-        printf(FAILED_PREPARE_STMT_ERR_MSG(stmt));
+        ap2p_log(FAILED_PREPARE_STMT_ERR_MSG(stmt));
         return -1;
     }
     
@@ -307,7 +309,7 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
         row_count += 1;
     }
     if ( res != SQLITE_DONE ) {
-        printf(FAILED_STMT_STEP_ERR_MSG);
+        ap2p_log(FAILED_STMT_STEP_ERR_MSG);
         goto exit_err_db;
     }
     sqlite3_finalize(conn_stmt);
@@ -353,7 +355,7 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
         row_count += 1;
     }
     if ( res != SQLITE_DONE ) {
-        printf(FAILED_STMT_STEP_ERR_MSG);
+        ap2p_log(FAILED_STMT_STEP_ERR_MSG);
         goto exit_err_db;
     }
     sqlite3_finalize(msg_stmt);
@@ -386,12 +388,12 @@ int ap2p_request_connection(char* peer_addr) {
         bind_fail |= (sqlite3_bind_int64(insert_stmt, 1, peer_id) != SQLITE_OK);
         bind_fail |= (sqlite3_bind_text(insert_stmt, 2, peer_addr, strlen(peer_addr), SQLITE_STATIC) != SQLITE_OK);
         if ( bind_fail ) {
-            printf(FAILED_PARAM_BIND_ERR_MSG);
+            ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
             goto exit_err_db;
         }
         
         if ( sqlite3_step(insert_stmt) != SQLITE_DONE ) {
-            printf(FAILED_STMT_STEP_ERR_MSG);
+            ap2p_log(FAILED_STMT_STEP_ERR_MSG);
             goto exit_err_db;
         }
         sqlite3_finalize(insert_stmt);
@@ -407,9 +409,9 @@ int ap2p_request_connection(char* peer_addr) {
     strncpy((char*)parcel+9, self_name, MAX_HOST_NAME);
     
     if ( send_parcel(parcel, PARCEL_CONN_REQ_LEN, peer_addr) == 0 ) {
-        printf(INFO": sent connection request to peer at %s; connection is awaiting acknowledgement\n", peer_addr);
+        ap2p_log(INFO": sent connection request to peer at %s; connection is awaiting acknowledgement\n", peer_addr);
     } else {
-        printf(INFO": could not send connection request to peer at %s; \x1b[33mconnection is pending\x1b[0m\n", peer_addr);
+        ap2p_log(INFO": could not send connection request to peer at %s; \x1b[33mconnection is pending\x1b[0m\n", peer_addr);
     }
     return 0;
     
@@ -436,7 +438,7 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
         }
         
         if ( (res = sqlite3_bind_int64(select_stmt, 1, conn_id)) != SQLITE_OK ) {
-            printf(FAILED_PARAM_BIND_ERR_MSG);
+            ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
             goto exit_err_db;
         }
         
@@ -449,14 +451,14 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
             self_id = sqlite3_column_int64(select_stmt, 2);
         }
         if ( res != SQLITE_DONE ) {
-            printf(FAILED_STMT_STEP_ERR_MSG);
+            ap2p_log(FAILED_STMT_STEP_ERR_MSG);
             goto exit_err_db;
         }
         sqlite3_finalize(select_stmt);
     } // end retrieve conn info from db
     
     if (conn_status != self_review) {
-        printf(ERROR": attempted to decide on a connection which wasn't awaiting review, conn status: (%c)\n", conn_status);
+        ap2p_log(ERROR": attempted to decide on a connection which wasn't awaiting review, conn status: (%c)\n", conn_status);
         goto exit_err_db;
     }
     
@@ -472,12 +474,12 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
             }
             
             if ( sqlite3_bind_int64(update_stmt, 1, conn_id) != SQLITE_OK ) {
-                printf(FAILED_PARAM_BIND_ERR_MSG);
+                ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
                 goto exit_err_db;
             }
             
             if ( sqlite3_step(update_stmt) != SQLITE_DONE ) {
-                printf(FAILED_STMT_STEP_ERR_MSG);
+                ap2p_log(FAILED_STMT_STEP_ERR_MSG);
                 goto exit_err_db;
             }
             sqlite3_finalize(update_stmt);
@@ -488,9 +490,9 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
         pack_long(parcel+1, self_id);
             
         if ( send_parcel(parcel, PARCEL_CONN_ACC_LEN, peer_addr) == 0 ) {
-            printf(INFO": rejected connection request from peer at %s", peer_addr);
+            ap2p_log(INFO": rejected connection request from peer at %s", peer_addr);
         } else {
-            printf(INFO": marked connection request from peer at %s as rejected, \x1b[33mbut\x1b[0m could not communicate it to the peer", peer_addr);
+            ap2p_log(INFO": marked connection request from peer at %s as rejected, \x1b[33mbut\x1b[0m could not communicate it to the peer", peer_addr);
         }
     } else { // accepted
         long peer_id = generate_id();
@@ -512,12 +514,12 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
             bind_fail |= (sqlite3_bind_text(update_stmt, 2, self_name, strlen(self_name), SQLITE_STATIC) != SQLITE_OK);
             bind_fail |= (sqlite3_bind_int64(update_stmt, 3, conn_id) != SQLITE_OK);
             if ( bind_fail ) {
-                printf(FAILED_PARAM_BIND_ERR_MSG);
+                ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
                 goto exit_err_db;
             }
             
             if ( sqlite3_step(update_stmt) != SQLITE_DONE ) {
-                printf(FAILED_STMT_STEP_ERR_MSG);
+                ap2p_log(FAILED_STMT_STEP_ERR_MSG);
                 goto exit_err_db;
             }
             sqlite3_finalize(update_stmt);
@@ -530,9 +532,9 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
         strncpy((char*)parcel+17, self_name, MAX_HOST_NAME);
             
         if ( send_parcel(parcel, PARCEL_CONN_ACC_LEN, peer_addr) == 0 ) {
-            printf(INFO": accepted connection request from peer at %s", peer_addr);
+            ap2p_log(INFO": accepted connection request from peer at %s", peer_addr);
         } else {
-            printf(INFO": marked connection request from peer at %s as accepted, \x1b[33mbut\x1b[0m could not communicate it to the peer", peer_addr);
+            ap2p_log(INFO": marked connection request from peer at %s as accepted, \x1b[33mbut\x1b[0m could not communicate it to the peer", peer_addr);
         }
     }
     
@@ -557,12 +559,12 @@ int ap2p_select_connection(long conn_id) {
     }
     
     if ( (res = sqlite3_bind_int64(update_stmt, 1, conn_id)) != SQLITE_OK ) {
-        printf(FAILED_PARAM_BIND_ERR_MSG);
+        ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
         goto exit_err_db;
     }
         
     if ( sqlite3_step(update_stmt) != SQLITE_DONE ) {
-        printf(FAILED_STMT_STEP_ERR_MSG);
+        ap2p_log(FAILED_STMT_STEP_ERR_MSG);
         goto exit_err_db;
     }
     sqlite3_finalize(update_stmt);
@@ -583,7 +585,7 @@ int ap2p_listen() {
     
     int listening_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (listening_sock < 0) {
-      printf(ERROR": peer socket creation failed\n");
+      ap2p_log(ERROR": peer socket creation failed\n");
       goto exit_err_net;
     }
   
@@ -593,15 +595,15 @@ int ap2p_listen() {
         .sin_port = revbo_u16(DEFAULT_PORT),
     };
     if (bind(listening_sock, (struct sockaddr *)&listening_addr, sizeof(listening_addr)) < 0) {
-      printf(ERROR": failed to bind server socket\n");
+      ap2p_log(ERROR": failed to bind server socket; %s\n", strerror(errno));
       goto exit_err_net;
     }
   
     if (listen(listening_sock, 1) < 0) {
-      printf(ERROR": failed to listen on peer socket\n");
+      ap2p_log(ERROR": failed to listen on peer socket; %s\n", strerror(errno));
       goto exit_err_net;
     }
-    printf(INFO": Listening for parcels at %s:%d...\n", LISTEN_ADDR, DEFAULT_PORT);
+    ap2p_log(INFO": Listening for parcels at %s:%d...\n", LISTEN_ADDR, DEFAULT_PORT);
     
     struct sockaddr_in incoming_addr;
     int incoming_addr_len = sizeof(incoming_addr);
@@ -613,12 +615,15 @@ int ap2p_listen() {
         char parcel_kind;
         // note that we only peek at parcel_kind without consuming the first byte
         // this makes parcel reading simpler as there's no need to offset PARCEL_LEN by one
-        recv(incoming_sock, &parcel_kind, 1, MSG_PEEK);
-        printf(DEBUG": conn from %s:%d with kind: %d\n", incoming_addr_str, incoming_addr.sin_port, parcel_kind);
+        if ( recv(incoming_sock, &parcel_kind, 1, MSG_PEEK) < 1) {
+            ap2p_log(WARN": could not read parcel kind");
+            continue;
+        }
+        ap2p_log(DEBUG": conn from %s:%d with kind: %d\n", incoming_addr_str, incoming_addr.sin_port, parcel_kind);
         
         switch (parcel_kind) {
             break; case PARCEL_CONN_REQ_KIND: {
-                printf(INFO": recieved a CONN_REQ parcel\n");
+                ap2p_log(INFO": recieved a CONN_REQ parcel\n");
                 unsigned char parcel[PARCEL_CONN_REQ_LEN];
                 if ( recv_parcel(incoming_sock, parcel, PARCEL_CONN_REQ_LEN) ) { continue; }
 
@@ -628,12 +633,12 @@ int ap2p_listen() {
                 char peer_name[MAX_HOST_NAME] = {0};
                 strncpy(peer_name, (char*)parcel+9, MAX_HOST_NAME);
 
-                printf(DEBUG": peer '%s' requested conn with self_id: %ld, \n", peer_name, self_id);
+                ap2p_log(DEBUG": peer '%s' requested conn with self_id: %ld, \n", peer_name, self_id);
                 
                 sqlite3_stmt *insert_stmt;
                 const char* insert_sql = "INSERT INTO Connections (self_id, peer_name, peer_addr, status) VALUES (?, ?, ?, 2);";
                 if ( prepare_sql_statement(db, &insert_stmt, insert_sql, &create_conn_table) ) {
-                    goto exit_err_db;
+                    continue;
                 }
                 
                 int bind_fail = 0;
@@ -641,67 +646,65 @@ int ap2p_listen() {
                 bind_fail |= (sqlite3_bind_text(insert_stmt, 2, peer_name, strlen(peer_name), SQLITE_STATIC) != SQLITE_OK);
                 bind_fail |= (sqlite3_bind_text(insert_stmt, 3, incoming_addr_str, strlen(incoming_addr_str), SQLITE_STATIC) != SQLITE_OK);
                 if ( bind_fail ) {
-                    printf(FAILED_PARAM_BIND_ERR_MSG);
-                    goto exit_err_db;
+                    ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
+                    continue;
                 }
                 
                 if ( sqlite3_step(insert_stmt) != SQLITE_DONE ) {
-                    printf(FAILED_STMT_STEP_ERR_MSG);
-                    goto exit_err_db;
+                    ap2p_log(FAILED_STMT_STEP_ERR_MSG);
+                    continue;
                 }
                 sqlite3_finalize(insert_stmt);
-                printf(DEBUG": inserted requested conn into the db, with self_id: %ld, peer_name: %s, peer_addr: %s\n", self_id, peer_name, incoming_addr_str);
+                ap2p_log(DEBUG": inserted requested conn into the db, with self_id: %ld, peer_name: %s, peer_addr: %s\n", self_id, peer_name, incoming_addr_str);
                 
                 unsigned char resp_parcel[PARCEL_CONN_ACK_LEN] = {0};
                 resp_parcel[0] = PARCEL_CONN_ACK_KIND;
                 pack_long(parcel+1, self_id);
 
                 if ( send_parcel(resp_parcel, PARCEL_CONN_ACK_LEN, incoming_addr_str) == 0 ) {
-                    printf(INFO": acknowledged connection request from peer at %s\n", incoming_addr_str);
+                    ap2p_log(INFO": acknowledged connection request from peer at %s\n", incoming_addr_str);
                 } else {
-                    printf(WARN": failed to acknowledge connection request from peer at %s\n", incoming_addr_str);
+                    ap2p_log(WARN": failed to acknowledge connection request from peer at %s\n", incoming_addr_str);
                 }
                 
             } break; case PARCEL_CONN_ACK_KIND: {
-                printf(INFO": recieved a CONN_ACK parcel\n");
+                ap2p_log(INFO": recieved a CONN_ACK parcel\n");
                 unsigned char parcel[PARCEL_CONN_ACK_LEN];
-                if (recv(incoming_sock, &parcel, PARCEL_CONN_ACK_LEN, 0) < PARCEL_CONN_ACK_LEN) {
-                    printf(WARN": could not read parcel contents\n");
-                }
+                if ( recv_parcel(incoming_sock, parcel, PARCEL_CONN_ACK_LEN) ) { continue; }
 
                 long peer_id = 0;
                 unpack_long(peer_id, parcel+1);
 
-                printf(DEBUG": peer with ID %ld acked conn req\n", peer_id);
+                ap2p_log(DEBUG": peer with ID %ld acked conn req\n", peer_id);
                 
                 sqlite3_stmt *update_stmt;
                 const char* update_sql = "UPDATE Connections SET status=3 WHERE peer_id=(?);";
                 if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) {
-                    goto exit_err_db;
+                    continue;
                 }
                 
                 if ( sqlite3_bind_int64(update_stmt, 1, peer_id) != SQLITE_OK ) {
-                    printf(FAILED_PARAM_BIND_ERR_MSG);
-                    goto exit_err_db;
+                    ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
+                    continue;
                 }
                 
                 if ( sqlite3_step(update_stmt) != SQLITE_DONE ) {
-                    printf(FAILED_STMT_STEP_ERR_MSG);
-                    goto exit_err_db;
+                    ap2p_log(FAILED_STMT_STEP_ERR_MSG);
+                    continue;
                 }
                 sqlite3_finalize(update_stmt);
-                printf(DEBUG": updated conn to 'awaiting peer review' where peer_id=%ld\n", peer_id);
+                ap2p_log(DEBUG": updated conn to 'awaiting peer review' where peer_id=%ld\n", peer_id);
                 
             } break; case PARCEL_CONN_REJ_KIND: {
-                printf(INFO": recieved a CONN_REJ parcel\n");
+                ap2p_log(INFO": recieved a CONN_REJ parcel\n");
             } break; case PARCEL_CONN_ACC_KIND: {
-                printf(INFO": recieved a CONN_ACC parcel\n");
+                ap2p_log(INFO": recieved a CONN_ACC parcel\n");
             } break; default:
-                printf(WARN": invalid parcel kind: %d\n", parcel_kind);
+                ap2p_log(WARN": invalid parcel kind: %d\n", parcel_kind);
         }
     }
     
-    printf(DEBUG": finished handling the parcel\n");
+    ap2p_log(DEBUG": finished handling the parcel\n");
     close(listening_sock);
     sqlite3_close(db);
     return 0;
