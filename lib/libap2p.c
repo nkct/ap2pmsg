@@ -9,6 +9,8 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <netdb.h>
 
 #define ERROR "\x1b[31mERROR\x1b[0m"
 #define WARN "\x1b[33mWARN\x1b[0m"
@@ -27,10 +29,11 @@
 
 #define DB_FILE "ap2p_storage.db"
 
-#define LISTEN_ADDR "0.0.0.0"
-#define DEFAULT_PORT 7676
+#define DEFAULT_LISTEN_ADDR "0.0.0.0"
+#define DEFAULT_PORT "7676"
 
-#define MAX_HOST_NAME 64 // in bytes
+#define MAX_HOST_NAME 64
+#define MAX_IP_ADDR_LEN 16
 
 // IDs and names are from the perspective of the sender
 #define PARCEL_CONN_REQ_KIND 1 // request conn
@@ -44,9 +47,6 @@
 
 #define PARCEL_CONN_ACC_KIND 4 // accept conn request
 #define PARCEL_CONN_ACC_LEN 81 // kind[1] + self_id[8] + peer_id[8] + self_name[64]
-
-/* Reverse the byte order of an unsigned short. */
-#define revbo_u16(d) ( ((d&0xff)<<8)|(d>>8) )
 
 #define startswith(str, pat) (strncmp((str), (pat), strlen((pat))) == 0)
 
@@ -102,6 +102,11 @@ unsigned long ap2p_strlen(const char* s) {
     return strlen(s);
 }
 
+int trace_callback(unsigned int T, void* C, void* P, void* X) {
+    ap2p_log(DEBUG": executing query: '%s'\n", sqlite3_expanded_sql(P));
+    return 0;
+}
+
 typedef enum ConnStatus {
     rejected    = -1, // the peer has reviewed this connection request and rejected it
     accepted    =  0, // this connection has been accepted and can be used to send and recieve messages
@@ -124,7 +129,7 @@ typedef struct Connection {
     char status; // see ConnStatus
 } Connection;
 
-int send_parcel(unsigned char* parcel, unsigned long parcel_len, char* addr) {
+int send_parcel(unsigned char* parcel, unsigned long parcel_len, char* addr, long port) {
     if (parcel_len == 0) { return 0; }
     
     ap2p_log(DEBUG": parcel: [");
@@ -143,7 +148,7 @@ int send_parcel(unsigned char* parcel, unsigned long parcel_len, char* addr) {
     struct sockaddr_in peer_sockaddr = {
         .sin_family = AF_INET,
         .sin_addr.s_addr = inet_addr(addr),
-        .sin_port = revbo_u16(DEFAULT_PORT),
+        .sin_port = htons(port),
     };
     if ( connect(peer_sock, (struct sockaddr*)&peer_sockaddr, sizeof(peer_sockaddr)) != 0 ) {
         ap2p_log(WARN": could not connect "NET_ERR_FMT"\n", NET_ERR(addr));
@@ -197,48 +202,6 @@ int create_msg_table(sqlite3* db) {
     return 0;
 }
 
-int create_state_table(sqlite3* db) {
-    ap2p_log(INFO": creating State table\n");
-    
-    char* errmsg = 0;
-    const char* create_state_sql = ""
-    "CREATE TABLE State ("
-        "pair_id INTEGER PRIMARY KEY, "
-        "key TEXT, "
-        "value TEXT"
-    ");";
-    if ( sqlite3_exec(db, create_state_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
-        ap2p_log(ERROR": could not create the State table; %s\n", errmsg);
-        sqlite3_free(errmsg);
-        return -1;
-    }
-    char* default_state_sql = ""
-    "INSERT INTO State (key, value) VALUES"
-        "('selected_conn', -1)"
-    ";";
-    if ( sqlite3_exec(db, default_state_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
-        ap2p_log(ERROR": could not insert dafaults into the State table; %s\n", errmsg);
-        sqlite3_free(errmsg);
-        return -1;
-    }
-    
-    return 0;
-}
-
-typedef struct Message {
-    long msg_id;
-    long conn_id;
-    long time_sent;
-    long time_recieved;
-    unsigned char content_type;
-    int content_len;
-    const unsigned char* content;
-} Message;
-
-int trace_callback(unsigned int T, void* C, void* P, void* X) {
-    ap2p_log(DEBUG": executing query: '%s'\n", sqlite3_expanded_sql(P));
-    return 0;
-}
 sqlite3* open_db() {
     sqlite3* db;
     if ( sqlite3_open(DB_FILE, &db) ) {
@@ -266,6 +229,108 @@ int prepare_sql_statement(sqlite3* db, sqlite3_stmt** stmt, const char* sql, int
     
     return 0;
 }
+
+int create_state_table(sqlite3* db) {
+    ap2p_log(INFO": creating State table\n");
+    
+    char* errmsg = 0;
+    const char* create_state_sql = ""
+    "CREATE TABLE State ("
+        "pair_id INTEGER PRIMARY KEY, "
+        "key TEXT UNIQUE, "
+        "value TEXT"
+    ");";
+    if ( sqlite3_exec(db, create_state_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
+        ap2p_log(ERROR": could not create the State table; %s\n", errmsg);
+        sqlite3_free(errmsg);
+        return -1;
+    }
+    
+    char self_addr[NI_MAXHOST] = {0};
+    { // get self addr
+        struct ifaddrs *ifaddr;
+        if (getifaddrs(&ifaddr) == -1) {
+            ap2p_log(ERROR": could not obtain the local IP addr structure; %s\n", strerror(errno));
+            return -1;
+        }
+        
+        int found_addr = 0;
+        for (struct ifaddrs *ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+            if ( ifa->ifa_addr == NULL || ifa->ifa_addr->sa_family != AF_INET ) { continue; }
+
+            struct sockaddr_in* inet_addr = (struct sockaddr_in*)ifa->ifa_addr;
+            
+            if ( ntohl(inet_addr->sin_addr.s_addr) != INADDR_LOOPBACK ) {
+                inet_ntop(AF_INET, &inet_addr->sin_addr, self_addr, MAX_IP_ADDR_LEN);
+                found_addr = 1;
+                break;
+            }
+        }
+        
+        freeifaddrs(ifaddr);
+
+        if (!found_addr) {
+            ap2p_log(ERROR": failed to find self addr\n");
+            return -1;
+        }
+    } // end get self addr
+    
+    sqlite3_stmt* insert_default_stmt;
+    char* default_state_sql = ""
+    "INSERT INTO State (key, value) VALUES"
+        "('selected_conn', -1),"
+        "('listen_addr', '"DEFAULT_LISTEN_ADDR"'),"
+        "('self_addr', ?),"
+        "('self_port', '"DEFAULT_PORT"')"
+    ";";
+    if ( prepare_sql_statement(db, &insert_default_stmt, default_state_sql, &create_state_table) ) { return -1; }
+    
+    if ( sqlite3_bind_text(insert_default_stmt, 1, self_addr, strlen(self_addr), SQLITE_STATIC) != SQLITE_OK ) {
+        ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
+        return -1;
+    }
+        
+    if ( sqlite3_step(insert_default_stmt) != SQLITE_DONE ) {
+        ap2p_log(FAILED_STMT_STEP_ERR_MSG);
+        return -1;
+    }
+    sqlite3_finalize(insert_default_stmt);
+    
+    return 0;
+}
+
+// remember to free value, this functions allocs
+int state_get(sqlite3* db, char* key, char* value) {
+    sqlite3_stmt* get_stmt;
+    char* get_sql = "SELECT value FROM State WHERE key=?";
+    if ( prepare_sql_statement(db, &get_stmt, get_sql, &create_state_table) ) { return -1; }
+    
+    if ( sqlite3_bind_text(get_stmt, 1, key, strlen(key), SQLITE_STATIC) != SQLITE_OK ) {
+        ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
+        return -1;
+    }
+        
+    if ( sqlite3_step(get_stmt) == SQLITE_ROW ) {
+        value = sqlite3_malloc(sqlite3_column_bytes(get_stmt, 1));
+        sprintf(value, "%s", sqlite3_column_text(get_stmt, 1));
+    } else {
+        ap2p_log(FAILED_STMT_STEP_ERR_MSG);
+        return -1;
+    }
+    sqlite3_finalize(get_stmt);
+    
+    return 0;
+}
+
+typedef struct Message {
+    long msg_id;
+    long conn_id;
+    long time_sent;
+    long time_recieved;
+    unsigned char content_type;
+    int content_len;
+    const unsigned char* content;
+} Message;
 
 // non-zero on error
 int ap2p_list_connections(Connection* buf, int* buf_len) {
@@ -408,7 +473,17 @@ int ap2p_request_connection(char* peer_addr) {
     pack_long(parcel+1, peer_id);
     strncpy((char*)parcel+9, self_name, MAX_HOST_NAME);
     
-    if ( send_parcel(parcel, PARCEL_CONN_REQ_LEN, peer_addr) == 0 ) {
+    char* self_port_str;
+    state_get(db, "self_port", self_port_str);
+    errno = 0;
+    long self_port = strtol(self_port_str, NULL, 10);
+    free(self_port_str);
+    if ( errno != 0 ) {
+        printf(ERROR": failed to convert self_port to long");
+        goto exit_err_db;
+    }
+    
+    if ( send_parcel(parcel, PARCEL_CONN_REQ_LEN, peer_addr, self_port) == 0 ) {
         ap2p_log(INFO": sent connection request to peer at %s; connection is awaiting acknowledgement\n", peer_addr);
     } else {
         ap2p_log(INFO": could not send connection request to peer at %s; \x1b[33mconnection is pending\x1b[0m\n", peer_addr);
@@ -489,7 +564,17 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
         parcel[0] = PARCEL_CONN_REJ_KIND;
         pack_long(parcel+1, self_id);
             
-        if ( send_parcel(parcel, PARCEL_CONN_ACC_LEN, peer_addr) == 0 ) {
+        char* self_port_str;
+        state_get(db, "self_port", self_port_str);
+        errno = 0;
+        long self_port = strtol(self_port_str, NULL, 10);
+        free(self_port_str);
+        if ( errno != 0 ) {
+            printf(ERROR": failed to convert self_port to long");
+            goto exit_err_db;
+        }
+        
+        if ( send_parcel(parcel, PARCEL_CONN_REQ_LEN, peer_addr, self_port) == 0 ) {
             ap2p_log(INFO": rejected connection request from peer at %s", peer_addr);
         } else {
             ap2p_log(INFO": marked connection request from peer at %s as rejected, \x1b[33mbut\x1b[0m could not communicate it to the peer", peer_addr);
@@ -531,7 +616,17 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
         pack_long(parcel+9, peer_id);
         strncpy((char*)parcel+17, self_name, MAX_HOST_NAME);
             
-        if ( send_parcel(parcel, PARCEL_CONN_ACC_LEN, peer_addr) == 0 ) {
+        char* self_port_str;
+        state_get(db, "self_port", self_port_str);
+        errno = 0;
+        long self_port = strtol(self_port_str, NULL, 10);
+        free(self_port_str);
+        if ( errno != 0 ) {
+            printf(ERROR": failed to convert self_port to long");
+            goto exit_err_db;
+        }
+        
+        if ( send_parcel(parcel, PARCEL_CONN_REQ_LEN, peer_addr, self_port) == 0 ) {
             ap2p_log(INFO": accepted connection request from peer at %s", peer_addr);
         } else {
             ap2p_log(INFO": marked connection request from peer at %s as accepted, \x1b[33mbut\x1b[0m could not communicate it to the peer", peer_addr);
@@ -588,11 +683,24 @@ int ap2p_listen() {
       ap2p_log(ERROR": peer socket creation failed\n");
       goto exit_err_net;
     }
+    
+    char* self_port_str;
+    state_get(db, "self_port", self_port_str);
+    errno = 0;
+    long self_port = strtol(self_port_str, NULL, 10);
+    free(self_port_str);
+    if ( errno != 0 ) {
+        printf(ERROR": failed to convert self_port to long");
+        goto exit_err_db;
+    }
+    
+    char* listen_addr;
+    state_get(db, "listen_addr", listen_addr);
   
     struct sockaddr_in listening_addr = {
         .sin_family = AF_INET,
-        .sin_addr.s_addr = inet_addr(LISTEN_ADDR),
-        .sin_port = revbo_u16(DEFAULT_PORT),
+        .sin_addr.s_addr = inet_addr(listen_addr),
+        .sin_port = htons(self_port),
     };
     if (bind(listening_sock, (struct sockaddr *)&listening_addr, sizeof(listening_addr)) < 0) {
       ap2p_log(ERROR": failed to bind server socket; %s\n", strerror(errno));
@@ -603,14 +711,15 @@ int ap2p_listen() {
       ap2p_log(ERROR": failed to listen on peer socket; %s\n", strerror(errno));
       goto exit_err_net;
     }
-    ap2p_log(INFO": Listening for parcels at %s:%d...\n", LISTEN_ADDR, DEFAULT_PORT);
+    ap2p_log(INFO": Listening for parcels at %s:%ld...\n", listen_addr, self_port);
+    free(listen_addr);
     
     struct sockaddr_in incoming_addr;
     int incoming_addr_len = sizeof(incoming_addr);
     while (1) {
         int incoming_sock = accept(listening_sock, (struct sockaddr*)&incoming_addr, (socklen_t*)&incoming_addr_len);
-        char incoming_addr_str[15];
-        inet_ntop(AF_INET, &incoming_addr.sin_addr, incoming_addr_str, 15);
+        char incoming_addr_str[MAX_IP_ADDR_LEN];
+        inet_ntop(AF_INET, &incoming_addr.sin_addr, incoming_addr_str, MAX_IP_ADDR_LEN);
         
         char parcel_kind;
         // note that we only peek at parcel_kind without consuming the first byte
@@ -661,7 +770,7 @@ int ap2p_listen() {
                 resp_parcel[0] = PARCEL_CONN_ACK_KIND;
                 pack_long(parcel+1, self_id);
 
-                if ( send_parcel(resp_parcel, PARCEL_CONN_ACK_LEN, incoming_addr_str) == 0 ) {
+                if ( send_parcel(resp_parcel, PARCEL_CONN_ACK_LEN, incoming_addr_str, self_port) == 0 ) {
                     ap2p_log(INFO": acknowledged connection request from peer at %s\n", incoming_addr_str);
                 } else {
                     ap2p_log(WARN": failed to acknowledge connection request from peer at %s\n", incoming_addr_str);
