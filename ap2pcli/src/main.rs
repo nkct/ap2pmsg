@@ -78,10 +78,23 @@ fn main() -> Result<(), isize> {
                     }
                 }
                 "r" | "-r" | "request" | "--request" => { 
-                    let addr = next_arg()?;
-                    println!("ADDR: {addr}"); 
-                    let res = libap2p::request_connection(&addr);
-                    println!("request_connection result: {res}"); 
+                    let addr_port = next_arg()?;
+                    if let Some((addr, port_str)) = addr_port.split_once(":") {
+                        let port;
+                        if let Ok(p) = port_str.parse::<i32>() {
+                            port = p;
+                        } else {
+                            log!("ERROR: <PORT> must be a valid integer");
+                            return Err(-1);
+                        }
+                        println!("ADDR: {addr}"); 
+                        println!("PORT: {port}"); 
+                        let res = libap2p::request_connection(&addr, port);
+                        println!("request_connection result: {res}"); 
+                    } else {
+                        log!("ERROR: could not split the provided addres into <ADDR> and <PORT>");
+                        return Err(-1);
+                    }
                 }
                 "d" | "-d" | "decide" | "--decide" => {
                     if let Ok(id) = next_arg()?.parse::<u64>() {

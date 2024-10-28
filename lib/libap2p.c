@@ -85,6 +85,7 @@ int create_conn_table(sqlite3* db) {
         "self_id INTEGER, "
         "peer_name TEXT, "
         "peer_addr TEXT NOT NULL, "
+        "peer_port INTEGER NOT NULL, " // in host byte order
         "online INTEGER DEFAULT 0, "
         "requested_at INTEGER DEFAULT (strftime('%s', 'now')) NOT NULL, "
         "updated_at INTEGER, "
@@ -123,6 +124,7 @@ typedef struct Connection {
     long self_id;
     const char* peer_name;
     const char* peer_addr;
+    int peer_port;
     bool online;
     long requested_at;
     long updated_at;
@@ -365,9 +367,10 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
             .self_id      = sqlite3_column_int64(conn_stmt, 2),
             .peer_name    = peer_name,
             .peer_addr    = peer_addr,
-            .online       =   sqlite3_column_int(conn_stmt, 5),
-            .requested_at = sqlite3_column_int64(conn_stmt, 6),
-            .updated_at  = sqlite3_column_int64(conn_stmt, 7),
+            .peer_port    =   sqlite3_column_int(conn_stmt, 5),
+            .online       =   sqlite3_column_int(conn_stmt, 6),
+            .requested_at = sqlite3_column_int64(conn_stmt, 7),
+            .updated_at   = sqlite3_column_int64(conn_stmt, 8),
             .status       = status,
         };
         buf[row_count] = conn;
@@ -436,7 +439,7 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
 }
 
 // non-zero on error
-int ap2p_request_connection(char* peer_addr) {
+int ap2p_request_connection(char* peer_addr, int peer_port) {
     long peer_id = generate_id();
     
     sqlite3 *db = open_db();
@@ -444,7 +447,7 @@ int ap2p_request_connection(char* peer_addr) {
     
     { // insert the conn into the db     
         sqlite3_stmt *insert_stmt;
-        const char* insert_sql = "INSERT INTO Connections (peer_id, peer_addr) VALUES (?, ?);";
+        const char* insert_sql = "INSERT INTO Connections (peer_id, peer_addr, peer_port) VALUES (?, ?, ?);";
         if ( prepare_sql_statement(db, &insert_stmt, insert_sql, &create_conn_table) ) {
             goto exit_err_db;
         }
@@ -452,6 +455,7 @@ int ap2p_request_connection(char* peer_addr) {
         int bind_fail = 0;
         bind_fail |= (sqlite3_bind_int64(insert_stmt, 1, peer_id) != SQLITE_OK);
         bind_fail |= (sqlite3_bind_text(insert_stmt, 2, peer_addr, strlen(peer_addr), SQLITE_STATIC) != SQLITE_OK);
+        bind_fail |= (sqlite3_bind_int(insert_stmt, 3, peer_port) != SQLITE_OK);
         if ( bind_fail ) {
             ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
             goto exit_err_db;
@@ -473,17 +477,7 @@ int ap2p_request_connection(char* peer_addr) {
     pack_long(parcel+1, peer_id);
     strncpy((char*)parcel+9, self_name, MAX_HOST_NAME);
     
-    char* self_port_str;
-    state_get(db, "self_port", self_port_str);
-    errno = 0;
-    long self_port = strtol(self_port_str, NULL, 10);
-    free(self_port_str);
-    if ( errno != 0 ) {
-        printf(ERROR": failed to convert self_port to long");
-        goto exit_err_db;
-    }
-    
-    if ( send_parcel(parcel, PARCEL_CONN_REQ_LEN, peer_addr, self_port) == 0 ) {
+    if ( send_parcel(parcel, PARCEL_CONN_REQ_LEN, peer_addr, peer_port) == 0 ) {
         ap2p_log(INFO": sent connection request to peer at %s; connection is awaiting acknowledgement\n", peer_addr);
     } else {
         ap2p_log(INFO": could not send connection request to peer at %s; \x1b[33mconnection is pending\x1b[0m\n", peer_addr);
@@ -499,6 +493,7 @@ int ap2p_request_connection(char* peer_addr) {
 // decision: 0 for acc, non-zero for rej
 int ap2p_decide_on_connection(long conn_id, int decision) {
     char* peer_addr;
+    int peer_port;
     long self_id;
     int conn_status;
     
@@ -507,7 +502,7 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
     if ( db == NULL ) { goto exit_err; }
     { // retrieve conn info from db
         sqlite3_stmt *select_stmt;
-        const char* select_sql = "SELECT peer_addr, self_id FROM Connections WHERE conn_id=(?);";
+        const char* select_sql = "SELECT self_id, peer_addr, peer_port, status FROM Connections WHERE conn_id=(?);";
         if ( prepare_sql_statement(db, &select_stmt, select_sql, &create_conn_table) ) {
             goto exit_err_db;
         }
@@ -518,12 +513,13 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
         }
         
         if ( (res = sqlite3_step(select_stmt)) == SQLITE_ROW ) {
-            conn_status = sqlite3_column_int(select_stmt, 0);
+            self_id = sqlite3_column_int64(select_stmt, 0);
             
             peer_addr = sqlite3_malloc(sqlite3_column_bytes(select_stmt, 1));
             sprintf(peer_addr, "%s", sqlite3_column_text(select_stmt, 1));
             
-            self_id = sqlite3_column_int64(select_stmt, 2);
+            peer_port = sqlite3_column_int(select_stmt, 2);
+            conn_status = sqlite3_column_int(select_stmt, 3);
         }
         if ( res != SQLITE_DONE ) {
             ap2p_log(FAILED_STMT_STEP_ERR_MSG);
@@ -563,18 +559,8 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
         unsigned char parcel[PARCEL_CONN_REJ_LEN] = {0};
         parcel[0] = PARCEL_CONN_REJ_KIND;
         pack_long(parcel+1, self_id);
-            
-        char* self_port_str;
-        state_get(db, "self_port", self_port_str);
-        errno = 0;
-        long self_port = strtol(self_port_str, NULL, 10);
-        free(self_port_str);
-        if ( errno != 0 ) {
-            printf(ERROR": failed to convert self_port to long");
-            goto exit_err_db;
-        }
         
-        if ( send_parcel(parcel, PARCEL_CONN_REQ_LEN, peer_addr, self_port) == 0 ) {
+        if ( send_parcel(parcel, PARCEL_CONN_REQ_LEN, peer_addr, peer_port) == 0 ) {
             ap2p_log(INFO": rejected connection request from peer at %s", peer_addr);
         } else {
             ap2p_log(INFO": marked connection request from peer at %s as rejected, \x1b[33mbut\x1b[0m could not communicate it to the peer", peer_addr);
@@ -615,18 +601,8 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
         pack_long(parcel+1, self_id);
         pack_long(parcel+9, peer_id);
         strncpy((char*)parcel+17, self_name, MAX_HOST_NAME);
-            
-        char* self_port_str;
-        state_get(db, "self_port", self_port_str);
-        errno = 0;
-        long self_port = strtol(self_port_str, NULL, 10);
-        free(self_port_str);
-        if ( errno != 0 ) {
-            printf(ERROR": failed to convert self_port to long");
-            goto exit_err_db;
-        }
         
-        if ( send_parcel(parcel, PARCEL_CONN_REQ_LEN, peer_addr, self_port) == 0 ) {
+        if ( send_parcel(parcel, PARCEL_CONN_REQ_LEN, peer_addr, peer_port) == 0 ) {
             ap2p_log(INFO": accepted connection request from peer at %s", peer_addr);
         } else {
             ap2p_log(INFO": marked connection request from peer at %s as accepted, \x1b[33mbut\x1b[0m could not communicate it to the peer", peer_addr);
@@ -745,7 +721,7 @@ int ap2p_listen() {
                 ap2p_log(DEBUG": peer '%s' requested conn with self_id: %ld, \n", peer_name, self_id);
                 
                 sqlite3_stmt *insert_stmt;
-                const char* insert_sql = "INSERT INTO Connections (self_id, peer_name, peer_addr, status) VALUES (?, ?, ?, 2);";
+                const char* insert_sql = "INSERT INTO Connections (self_id, peer_name, peer_addr, peer_port, status) VALUES (?, ?, ?, ?, 2);";
                 if ( prepare_sql_statement(db, &insert_stmt, insert_sql, &create_conn_table) ) {
                     continue;
                 }
@@ -754,6 +730,7 @@ int ap2p_listen() {
                 bind_fail |= (sqlite3_bind_int64(insert_stmt, 1, self_id) != SQLITE_OK);
                 bind_fail |= (sqlite3_bind_text(insert_stmt, 2, peer_name, strlen(peer_name), SQLITE_STATIC) != SQLITE_OK);
                 bind_fail |= (sqlite3_bind_text(insert_stmt, 3, incoming_addr_str, strlen(incoming_addr_str), SQLITE_STATIC) != SQLITE_OK);
+                bind_fail |= (sqlite3_bind_int(insert_stmt, 4, incoming_addr.sin_port) != SQLITE_OK);
                 if ( bind_fail ) {
                     ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
                     continue;

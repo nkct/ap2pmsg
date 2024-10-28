@@ -8,7 +8,7 @@ extern "C" {
     fn ap2p_strlen(s: *const u8) -> usize;
     fn ap2p_list_connections(buf: *const Connection, buf_len: &i32) -> i32;
     fn ap2p_list_messages(buf: *const Message, buf_len: &i32) -> i32;
-    fn ap2p_request_connection(addr: *const u8) -> i32;
+    fn ap2p_request_connection(addr: *const u8, port: i32) -> i32;
     fn ap2p_select_connection(conn_id: u64) -> i32;
     fn ap2p_decide_on_connection(conn_id: u64, decison: i32) -> i32;
     fn ap2p_listen() -> i32;
@@ -30,6 +30,7 @@ pub struct Connection {
     // TODO: check if these raw ptrs need manual freeing
     peer_name: *const u8,
     peer_addr: *const u8,
+    peer_port: i32,
     online: bool,
     requested_at: i64,
     resolved_at: i64,
@@ -98,8 +99,8 @@ pub fn list_messages(max: i32) -> Result<Vec<Message>, ()> {
     return Ok(buf);
 }
 
-pub fn request_connection(addr: &str) -> i32 {
-    return unsafe { ap2p_request_connection(addr.as_ptr()) }
+pub fn request_connection(addr: &str, port: i32) -> i32 {
+    return unsafe { ap2p_request_connection(addr.as_ptr(), port) }
 }
 
 pub fn select_connection(conn_id: u64) -> i32 {
