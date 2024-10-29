@@ -20,6 +20,8 @@ pub enum ConnStatus {
     Rejected = -1,
     Accepted = 0,
     Pending = 1,
+    SelfReview = 2,
+    PeerReview = 3,
 }
 #[repr(C)]
 #[derive(Debug)]
@@ -38,7 +40,7 @@ pub struct Connection {
 }
 impl Connection {
     pub fn get_peer_name(&self) -> Option<&str> {
-        if self.status == ConnStatus::Accepted {
+        if self.status == ConnStatus::Accepted || self.status == ConnStatus::SelfReview {
             let peer_name = unsafe { str::from_utf8_unchecked(slice::from_raw_parts(self.peer_name, ap2p_strlen(self.peer_name))) };
             return Some(peer_name);
         } else {

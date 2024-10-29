@@ -315,8 +315,8 @@ char* state_get(sqlite3* db, char* key) {
     
     char* value = NULL;
     if ( sqlite3_step(get_stmt) == SQLITE_ROW ) {
-        value = malloc(sqlite3_column_bytes(get_stmt, 0));
-        sprintf(value, "%s", sqlite3_column_text(get_stmt, 0));
+        value = malloc(sqlite3_column_bytes(get_stmt, 0)+1);
+        strcpy(value, (char*)sqlite3_column_text(get_stmt, 0));
     } else {
         ap2p_log(FAILED_STMT_STEP_ERR_MSG);
         return NULL;
@@ -343,6 +343,9 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
     
     int res;
     sqlite3_stmt* conn_stmt;
+    // prefer SELECT * over specific fields 
+    // because this way will fail on any change to the Connections table
+    // and remind you to update this function
     const char* select_sql = "SELECT * FROM Connections;";
     if ( prepare_sql_statement(db, &conn_stmt, select_sql, &create_conn_table) ) {
         goto exit_err_db;
@@ -350,18 +353,18 @@ int ap2p_list_connections(Connection* buf, int* buf_len) {
     
     int row_count = 0;
     while ( (res = sqlite3_step(conn_stmt)) == SQLITE_ROW ) {
-        int status = sqlite3_column_int(conn_stmt, 8);
+        int status = sqlite3_column_int(conn_stmt, 9);
         
         char* peer_name;
-        if ( status==accepted ) {
-            peer_name = sqlite3_malloc(sqlite3_column_bytes(conn_stmt, 3));
-            sprintf(peer_name, "%s", sqlite3_column_text(conn_stmt, 3));
+        if ( status==accepted || status==self_review ) {
+            peer_name = sqlite3_malloc(sqlite3_column_bytes(conn_stmt, 3)+1);
+            strcpy(peer_name, (char*)sqlite3_column_text(conn_stmt, 3));
         } else {
             peer_name = NULL;
         }
         
-        char* peer_addr = sqlite3_malloc(sqlite3_column_bytes(conn_stmt, 4));
-        sprintf(peer_addr, "%s", sqlite3_column_text(conn_stmt, 4));
+        char* peer_addr = sqlite3_malloc(sqlite3_column_bytes(conn_stmt, 4)+1);
+        strcpy(peer_addr, (char*)sqlite3_column_text(conn_stmt, 4));
         
         Connection conn = {
             .conn_id      = sqlite3_column_int64(conn_stmt, 0),
@@ -408,7 +411,7 @@ int ap2p_list_messages(Message* buf, int* buf_len) {
     
     int row_count = 0;
     while ( (res = sqlite3_step(msg_stmt)) == SQLITE_ROW ) {
-        unsigned long content_len = sqlite3_column_bytes(msg_stmt, 5);
+        unsigned long content_len = sqlite3_column_bytes(msg_stmt, 5)+1;
         unsigned char* content = sqlite3_malloc(content_len);
         memcpy(content, sqlite3_column_blob(msg_stmt, 5), content_len);
         
@@ -517,8 +520,8 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
         if ( (res = sqlite3_step(select_stmt)) == SQLITE_ROW ) {
             self_id = sqlite3_column_int64(select_stmt, 0);
             
-            peer_addr = sqlite3_malloc(sqlite3_column_bytes(select_stmt, 1));
-            sprintf(peer_addr, "%s", sqlite3_column_text(select_stmt, 1));
+            peer_addr = sqlite3_malloc(sqlite3_column_bytes(select_stmt, 1)+1);
+            strcpy(peer_addr, (char*)sqlite3_column_text(select_stmt, 1));
             
             peer_port = sqlite3_column_int(select_stmt, 2);
             conn_status = sqlite3_column_int(select_stmt, 3);
