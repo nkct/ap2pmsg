@@ -302,26 +302,28 @@ int create_state_table(sqlite3* db) {
 }
 
 // remember to free value, this functions allocs
-int state_get(sqlite3* db, char* key, char* value) {
+// TODO: consider an interface akin to 'state_get_many()' for multiple keys at once
+char* state_get(sqlite3* db, char* key) {    
     sqlite3_stmt* get_stmt;
     char* get_sql = "SELECT value FROM State WHERE key=?";
-    if ( prepare_sql_statement(db, &get_stmt, get_sql, &create_state_table) ) { return -1; }
+    if ( prepare_sql_statement(db, &get_stmt, get_sql, &create_state_table) ) { return NULL; }
     
     if ( sqlite3_bind_text(get_stmt, 1, key, strlen(key), SQLITE_STATIC) != SQLITE_OK ) {
         ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
-        return -1;
+        return NULL;
     }
-        
+    
+    char* value = NULL;
     if ( sqlite3_step(get_stmt) == SQLITE_ROW ) {
-        value = sqlite3_malloc(sqlite3_column_bytes(get_stmt, 1));
-        sprintf(value, "%s", sqlite3_column_text(get_stmt, 1));
+        value = malloc(sqlite3_column_bytes(get_stmt, 0));
+        sprintf(value, "%s", sqlite3_column_text(get_stmt, 0));
     } else {
         ap2p_log(FAILED_STMT_STEP_ERR_MSG);
-        return -1;
+        return NULL;
     }
     sqlite3_finalize(get_stmt);
     
-    return 0;
+    return value;
 }
 
 typedef struct Message {
@@ -660,8 +662,12 @@ int ap2p_listen() {
       goto exit_err_net;
     }
     
-    char* self_port_str;
-    state_get(db, "self_port", self_port_str);
+    char* self_port_str = state_get(db, "self_port");
+    if ( self_port_str == NULL ) {
+        printf(ERROR": failed to retrieve self_port from the State table");
+        goto exit_err_db;
+    }
+    
     errno = 0;
     long self_port = strtol(self_port_str, NULL, 10);
     free(self_port_str);
@@ -670,9 +676,12 @@ int ap2p_listen() {
         goto exit_err_db;
     }
     
-    char* listen_addr;
-    state_get(db, "listen_addr", listen_addr);
-  
+    char* listen_addr = state_get(db, "listen_addr");
+    if ( listen_addr == NULL ) {
+        printf(ERROR": failed to retrieve listen_addr from the State table");
+        goto exit_err_db;
+    }
+    
     struct sockaddr_in listening_addr = {
         .sin_family = AF_INET,
         .sin_addr.s_addr = inet_addr(listen_addr),
