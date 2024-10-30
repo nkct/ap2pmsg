@@ -37,7 +37,7 @@
 
 // IDs and names are from the perspective of the sender
 #define PARCEL_CONN_REQ_KIND 1 // request conn
-#define PARCEL_CONN_REQ_LEN 73 // kind[1] + peer_id[8] + self_name[64]
+#define PARCEL_CONN_REQ_LEN 93 // kind[1] + peer_id[8] + self_name[64] + self_addr[16] + self_port[4]
 
 #define PARCEL_CONN_ACK_KIND 2 // acknowledge conn request
 #define PARCEL_CONN_ACK_LEN  9 // kind[1] + self_id[8]
@@ -57,8 +57,18 @@ for (int i=0;i<8;i++) {                   \
     (buf)[i] = ((d) >> (8*(7-i))) & 0xFF; \
 }
 
+#define pack_int(buf, d)                 \
+for (int i=0;i<4;i++) {                   \
+    (buf)[i] = ((d) >> (8*(3-i))) & 0xFF; \
+}
+
 #define unpack_long(d, buf)      \
 for (int i=0;i<8;i++) {          \
+    (d) = ((d) << 8) + (buf)[i]; \
+}
+
+#define unpack_int(d, buf)      \
+for (int i=0;i<4;i++) {          \
     (d) = ((d) << 8) + (buf)[i]; \
 }
 
@@ -306,7 +316,7 @@ int create_state_table(sqlite3* db) {
 char* state_get(sqlite3* db, char* key) {    
     sqlite3_stmt* get_stmt;
     char* get_sql = "SELECT value FROM State WHERE key=?";
-    if ( prepare_sql_statement(db, &get_stmt, get_sql, &create_state_table) ) { return NULL; }
+    if ( prepare_sql_statement(db, &get_stmt, get_sql, &create_state_table) != SQLITE_OK ) { return NULL; }
     
     if ( sqlite3_bind_text(get_stmt, 1, key, strlen(key), SQLITE_STATIC) != SQLITE_OK ) {
         ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
@@ -477,10 +487,32 @@ int ap2p_request_connection(char* peer_addr, int peer_port) {
     char self_name[MAX_HOST_NAME];
     cpy_self_name(self_name);
     
+    char* self_addr = state_get(db, "self_addr");
+    if ( self_addr == NULL ) {
+        printf(ERROR": failed to retrieve self_addr from the State table\n");
+        goto exit_err_db;
+    }
+    
+    char* self_port_str = state_get(db, "self_port");
+    if ( self_port_str == NULL ) {
+        printf(ERROR": failed to retrieve self_port from the State table\n");
+        goto exit_err_db;
+    }
+    
+    errno = 0;
+    long self_port = strtol(self_port_str, NULL, 10);
+    free(self_port_str);
+    if ( errno != 0 ) {
+        printf(ERROR": failed to convert self_port to long");
+        goto exit_err_db;
+    }
+    
     unsigned char parcel[PARCEL_CONN_REQ_LEN] = {0};
     parcel[0] = PARCEL_CONN_REQ_KIND;
     pack_long(parcel+1, peer_id);
     strncpy((char*)parcel+9, self_name, MAX_HOST_NAME);
+    strncpy((char*)parcel+73, self_addr, MAX_IP_ADDR_LEN);
+    pack_int(parcel+89, self_port);
     
     if ( send_parcel(parcel, PARCEL_CONN_REQ_LEN, peer_addr, peer_port) == 0 ) {
         ap2p_log(INFO": sent connection request to peer at %s:%d; connection is awaiting acknowledgement\n", peer_addr, peer_port);
@@ -565,7 +597,7 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
         parcel[0] = PARCEL_CONN_REJ_KIND;
         pack_long(parcel+1, self_id);
         
-        if ( send_parcel(parcel, PARCEL_CONN_REQ_LEN, peer_addr, peer_port) == 0 ) {
+        if ( send_parcel(parcel, PARCEL_CONN_REJ_LEN, peer_addr, peer_port) == 0 ) {
             ap2p_log(INFO": rejected connection request from peer at %s", peer_addr);
         } else {
             ap2p_log(INFO": marked connection request from peer at %s as rejected, \x1b[33mbut\x1b[0m could not communicate it to the peer", peer_addr);
@@ -607,7 +639,7 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
         pack_long(parcel+9, peer_id);
         strncpy((char*)parcel+17, self_name, MAX_HOST_NAME);
         
-        if ( send_parcel(parcel, PARCEL_CONN_REQ_LEN, peer_addr, peer_port) == 0 ) {
+        if ( send_parcel(parcel, PARCEL_CONN_ACC_LEN, peer_addr, peer_port) == 0 ) {
             ap2p_log(INFO": accepted connection request from peer at %s", peer_addr);
         } else {
             ap2p_log(INFO": marked connection request from peer at %s as accepted, \x1b[33mbut\x1b[0m could not communicate it to the peer", peer_addr);
@@ -729,6 +761,12 @@ int ap2p_listen() {
                 
                 char peer_name[MAX_HOST_NAME] = {0};
                 strncpy(peer_name, (char*)req_parcel+9, MAX_HOST_NAME);
+                
+                char peer_addr[MAX_IP_ADDR_LEN] = {0};
+                strncpy(peer_name, (char*)req_parcel+73, MAX_IP_ADDR_LEN);
+                
+                int peer_port = 0;
+                unpack_int(self_id, req_parcel+89);
 
                 ap2p_log(DEBUG": peer '%s' requested conn with self_id: %ld, \n", peer_name, self_id);
                 
@@ -742,8 +780,8 @@ int ap2p_listen() {
                 int bind_fail = 0;
                 bind_fail |= (sqlite3_bind_int64(insert_stmt, 1, self_id) != SQLITE_OK);
                 bind_fail |= (sqlite3_bind_text(insert_stmt, 2, peer_name, strlen(peer_name), SQLITE_STATIC) != SQLITE_OK);
-                bind_fail |= (sqlite3_bind_text(insert_stmt, 3, incoming_addr_str, strlen(incoming_addr_str), SQLITE_STATIC) != SQLITE_OK);
-                bind_fail |= (sqlite3_bind_int(insert_stmt, 4, incoming_addr.sin_port) != SQLITE_OK);
+                bind_fail |= (sqlite3_bind_text(insert_stmt, 3, peer_addr, strlen(peer_addr), SQLITE_STATIC) != SQLITE_OK);
+                bind_fail |= (sqlite3_bind_int(insert_stmt, 4, peer_port) != SQLITE_OK);
                 if ( bind_fail ) {
                     ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
                     continue;
