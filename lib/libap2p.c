@@ -506,7 +506,7 @@ int ap2p_request_connection(char* peer_addr, int peer_port) {
     long self_port = strtol(self_port_str, NULL, 10);
     free(self_port_str);
     if ( errno != 0 ) {
-        printf(ERROR": failed to convert self_port to long");
+        printf(ERROR": failed to convert self_port to long\n");
         goto exit_err_db;
     }
     
@@ -539,7 +539,6 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
     long self_id;
     int conn_status;
     
-    int res;
     sqlite3 *db = open_db();
     if ( db == NULL ) { goto exit_err; }
     { // retrieve conn info from db
@@ -549,12 +548,12 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
             goto exit_err_db;
         }
         
-        if ( (res = sqlite3_bind_int64(select_stmt, 1, conn_id)) != SQLITE_OK ) {
+        if ( sqlite3_bind_int64(select_stmt, 1, conn_id) != SQLITE_OK ) {
             ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
             goto exit_err_db;
         }
         
-        if ( (res = sqlite3_step(select_stmt)) == SQLITE_ROW ) {
+        if ( sqlite3_step(select_stmt) == SQLITE_ROW ) {
             self_id = sqlite3_column_int64(select_stmt, 0);
             
             peer_addr = sqlite3_malloc(sqlite3_column_bytes(select_stmt, 1)+1);
@@ -563,7 +562,7 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
             peer_port = sqlite3_column_int(select_stmt, 2);
             conn_status = sqlite3_column_int(select_stmt, 3);
         }
-        if ( res != SQLITE_DONE ) {
+        if ( sqlite3_step(select_stmt) != SQLITE_DONE ) {
             ap2p_log(FAILED_STMT_STEP_ERR_MSG);
             goto exit_err_db;
         }
@@ -603,9 +602,9 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
         pack_long(parcel+1, self_id);
         
         if ( send_parcel(parcel, PARCEL_CONN_REJ_LEN, peer_addr, peer_port) == 0 ) {
-            ap2p_log(INFO": rejected connection request from peer at %s", peer_addr);
+            ap2p_log(INFO": rejected connection request from peer at %s\n", peer_addr);
         } else {
-            ap2p_log(INFO": marked connection request from peer at %s as rejected, \x1b[33mbut\x1b[0m could not communicate it to the peer", peer_addr);
+            ap2p_log(INFO": marked connection request from peer at %s as rejected, \x1b[33mbut\x1b[0m could not communicate it to the peer\n", peer_addr);
         }
     } else { // accepted
         long peer_id = generate_id();
@@ -616,7 +615,7 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
             sqlite3_stmt *update_stmt;
             const char* update_sql = ""
             "UPDATE Connections "
-            "SET updated_at=(strftime('%s', 'now')), peer_id=(?), self_name=(?), status=0 "
+            "SET updated_at=(strftime('%s', 'now')), peer_id=(?), status=0 "
             "WHERE conn_id=(?);";
             if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) {
                 goto exit_err_db;
@@ -624,8 +623,7 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
             
             int bind_fail = 0;
             bind_fail |= (sqlite3_bind_int64(update_stmt, 1, peer_id) != SQLITE_OK);
-            bind_fail |= (sqlite3_bind_text(update_stmt, 2, self_name, strlen(self_name), SQLITE_STATIC) != SQLITE_OK);
-            bind_fail |= (sqlite3_bind_int64(update_stmt, 3, conn_id) != SQLITE_OK);
+            bind_fail |= (sqlite3_bind_int64(update_stmt, 2, conn_id) != SQLITE_OK);
             if ( bind_fail ) {
                 ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
                 goto exit_err_db;
@@ -645,9 +643,9 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
         strncpy((char*)parcel+17, self_name, MAX_HOST_NAME);
         
         if ( send_parcel(parcel, PARCEL_CONN_ACC_LEN, peer_addr, peer_port) == 0 ) {
-            ap2p_log(INFO": accepted connection request from peer at %s", peer_addr);
+            ap2p_log(INFO": accepted connection request from peer at %s\n", peer_addr);
         } else {
-            ap2p_log(INFO": marked connection request from peer at %s as accepted, \x1b[33mbut\x1b[0m could not communicate it to the peer", peer_addr);
+            ap2p_log(INFO": marked connection request from peer at %s as accepted, \x1b[33mbut\x1b[0m could not communicate it to the peer\n", peer_addr);
         }
     }
     
@@ -704,7 +702,7 @@ int ap2p_listen() {
     
     char* self_port_str = state_get(db, "self_port");
     if ( self_port_str == NULL ) {
-        printf(ERROR": failed to retrieve self_port from the State table");
+        printf(ERROR": failed to retrieve self_port from the State table\n");
         goto exit_err_db;
     }
     
@@ -712,13 +710,13 @@ int ap2p_listen() {
     long self_port = strtol(self_port_str, NULL, 10);
     free(self_port_str);
     if ( errno != 0 ) {
-        printf(ERROR": failed to convert self_port to long");
+        printf(ERROR": failed to convert self_port to long\n");
         goto exit_err_db;
     }
     
     char* listen_addr = state_get(db, "listen_addr");
     if ( listen_addr == NULL ) {
-        printf(ERROR": failed to retrieve listen_addr from the State table");
+        printf(ERROR": failed to retrieve listen_addr from the State table\n");
         goto exit_err_db;
     }
     
@@ -750,7 +748,7 @@ int ap2p_listen() {
         // note that we only peek at parcel_kind without consuming the first byte
         // this makes parcel reading simpler as there's no need to offset PARCEL_LEN by one
         if ( recv(incoming_sock, &parcel_kind, 1, MSG_PEEK) < 1) {
-            ap2p_log(WARN": could not read parcel kind");
+            ap2p_log(WARN": could not read parcel kind\n");
             continue;
         }
         ap2p_log(DEBUG": conn from %s:%d with kind: %d\n", incoming_addr_str, incoming_addr.sin_port, parcel_kind);
@@ -819,7 +817,7 @@ int ap2p_listen() {
                 ap2p_log(DEBUG": peer with ID %ld acked conn req\n", peer_id);
                 
                 sqlite3_stmt *update_stmt;
-                const char* update_sql = "UPDATE Connections SET status=3 WHERE peer_id=(?);";
+                const char* update_sql = "UPDATE Connections SET updated_at=(strftime('%s', 'now')), status=3 WHERE peer_id=(?);";
                 if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) {
                     continue;
                 }

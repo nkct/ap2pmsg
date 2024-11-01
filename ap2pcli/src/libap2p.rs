@@ -35,7 +35,7 @@ pub struct Connection {
     peer_port: i32,
     online: bool,
     requested_at: i64,
-    resolved_at: i64,
+    updated_at: i64,
     status: ConnStatus,
 }
 impl Connection {
