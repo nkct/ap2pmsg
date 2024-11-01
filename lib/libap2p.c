@@ -31,6 +31,7 @@
 
 #define DEFAULT_LISTEN_ADDR "0.0.0.0"
 #define DEFAULT_PORT "7676"
+#define DEFAULT_NAME "the_pear_of_adam"
 
 #define MAX_HOST_NAME 64
 #define MAX_IP_ADDR_LEN 16
@@ -70,18 +71,6 @@ for (int i=0;i<8;i++) {          \
 #define unpack_int(d, buf)      \
 for (int i=0;i<4;i++) {          \
     (d) = ((d) << 8) + (buf)[i]; \
-}
-
-long generate_id() {
-    // TODO: more sophisticated peer_id generation
-    // which would ensure non-repeatability
-    srandom(time(NULL));
-    return random();
-}
-void cpy_self_name(char* dst) {
-    // TODO: get self_name from state table
-    const char* self_name = "the_pear_of_adam";
-    strcpy(dst, self_name);
 }
 
 int create_conn_table(sqlite3* db) {
@@ -297,7 +286,8 @@ int create_state_table(sqlite3* db) {
         "('selected_conn', -1),"
         "('listen_addr', '"DEFAULT_LISTEN_ADDR"'),"
         "('self_addr', ?),"
-        "('self_port', '"DEFAULT_PORT"')"
+        "('self_port', '"DEFAULT_PORT"'), "
+        "('self_name', '"DEFAULT_NAME"')"
     ";";
     if ( prepare_sql_statement(db, &insert_default_stmt, default_state_sql, &create_state_table) ) { return -1; }
     
@@ -338,6 +328,18 @@ char* state_get(sqlite3* db, char* key) {
     sqlite3_finalize(get_stmt);
     
     return value;
+}
+
+long generate_id() {
+    // TODO: more sophisticated peer_id generation
+    // which would ensure non-repeatability
+    srandom(time(NULL));
+    return random();
+}
+void cpy_self_name(sqlite3* db, char* dst) {
+    char* self_name = state_get(db, "self_name");
+    strcpy(dst, self_name);
+    free(self_name);
 }
 
 typedef struct Message {
@@ -488,7 +490,7 @@ int ap2p_request_connection(char* peer_addr, int peer_port) {
     } // end inserting the conn into the db
     
     char self_name[MAX_HOST_NAME];
-    cpy_self_name(self_name);
+    cpy_self_name(db, self_name);
     
     char* self_addr = state_get(db, "self_addr");
     if ( self_addr == NULL ) {
@@ -609,7 +611,7 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
     } else { // accepted
         long peer_id = generate_id();
         char self_name[MAX_HOST_NAME];
-        cpy_self_name(self_name);
+        cpy_self_name(db, self_name);
         
         { // update conn in db
             sqlite3_stmt *update_stmt;
