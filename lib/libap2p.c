@@ -768,12 +768,12 @@ int ap2p_listen() {
                 strncpy(peer_name, (char*)req_parcel+9, MAX_HOST_NAME);
                 
                 char peer_addr[MAX_IP_ADDR_LEN] = {0};
-                strncpy(peer_name, (char*)req_parcel+73, MAX_IP_ADDR_LEN);
+                strncpy(peer_addr, (char*)req_parcel+73, MAX_IP_ADDR_LEN);
                 
                 int peer_port = 0;
-                unpack_int(self_id, req_parcel+89);
+                unpack_int(peer_port, req_parcel+89);
 
-                ap2p_log(DEBUG": peer '%s' requested conn with self_id: %ld, \n", peer_name, self_id);
+                ap2p_log(DEBUG": conn request [self_id: %ld, peer_name: %s, peer_addr: %s, peer_port: %d] \n", self_id, peer_name, peer_addr, peer_port);
                 
                 sqlite3_stmt *insert_stmt;
                 const char* insert_sql = "INSERT INTO Connections (self_id, peer_name, peer_addr, peer_port, status) VALUES (?, ?, ?, ?, 2);";
@@ -781,7 +781,6 @@ int ap2p_listen() {
                     continue;
                 }
                 
-                // TODO: should be storing the provided addr and port instead of the incoming one
                 int bind_fail = 0;
                 bind_fail |= (sqlite3_bind_int64(insert_stmt, 1, self_id) != SQLITE_OK);
                 bind_fail |= (sqlite3_bind_text(insert_stmt, 2, peer_name, strlen(peer_name), SQLITE_STATIC) != SQLITE_OK);
@@ -797,16 +796,16 @@ int ap2p_listen() {
                     continue;
                 }
                 sqlite3_finalize(insert_stmt);
-                ap2p_log(DEBUG": inserted requested conn into the db, with self_id: %ld, peer_name: %s, peer_addr: %s\n", self_id, peer_name, incoming_addr_str);
+                ap2p_log(DEBUG": inserted requested conn into the db, with self_id: %ld, peer_name: %s, peer_addr: %s, peer_port: %d\n", self_id, peer_name, peer_addr, peer_port);
                 
                 unsigned char ack_parcel[PARCEL_CONN_ACK_LEN] = {0};
                 ack_parcel[0] = PARCEL_CONN_ACK_KIND;
                 pack_long(ack_parcel+1, self_id);
                 
-                if ( send_parcel(ack_parcel, PARCEL_CONN_ACK_LEN, incoming_addr_str, self_port) == 0 ) {
-                    ap2p_log(INFO": acknowledged connection request from peer at %s:%d\n", incoming_addr_str, incoming_addr.sin_port);
+                if ( send_parcel(ack_parcel, PARCEL_CONN_ACK_LEN, peer_addr, peer_port) == 0 ) {
+                    ap2p_log(INFO": acknowledged connection request from peer at %s:%d\n", peer_addr, peer_port);
                 } else {
-                    ap2p_log(WARN": failed to acknowledge connection request from peer at %s:%d\n", incoming_addr_str, incoming_addr.sin_port);
+                    ap2p_log(WARN": failed to acknowledge connection request from peer at %s:%d\n", peer_addr, peer_port);
                 }
                 
             } break; case PARCEL_CONN_ACK_KIND: {

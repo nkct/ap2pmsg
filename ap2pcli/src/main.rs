@@ -104,7 +104,7 @@ fn main() -> Result<(), isize> {
                         println!("ID: {id}");
                         let res;
                         match next_arg()?.as_str() {
-                            "y" | "yes" | "a" | "acc" | "accept" => { res = libap2p::decide_on_connection(id, 0); }
+                            "y" | "yes" | "a" | "acc" | "accept" => { res = libap2p::decide_on_connection(id,  0); }
                             "n" | "no"  | "r" | "rej" | "reject" => { res = libap2p::decide_on_connection(id, -1);}
                             _ => {
                                 log!("ERROR: <DECISION> must be either [\"y\", \"yes\", \"a\", \"acc\", \"accept\"] or [\"n\", \"no\", \"r\", \"rej\", \"reject\"]");
