@@ -808,11 +808,11 @@ int ap2p_listen() {
                 
             } break; case PARCEL_CONN_ACK_KIND: {
                 ap2p_log(INFO": recieved a CONN_ACK parcel\n");
-                unsigned char parcel[PARCEL_CONN_ACK_LEN];
-                if ( recv_parcel(incoming_sock, parcel, PARCEL_CONN_ACK_LEN) ) { continue; }
+                unsigned char ack_parcel[PARCEL_CONN_ACK_LEN];
+                if ( recv_parcel(incoming_sock, ack_parcel, PARCEL_CONN_ACK_LEN) ) { continue; }
 
                 long peer_id = 0;
-                unpack_long(peer_id, parcel+1);
+                unpack_long(peer_id, ack_parcel+1);
 
                 ap2p_log(DEBUG": peer with ID %ld acked conn req\n", peer_id);
                 
@@ -836,8 +836,74 @@ int ap2p_listen() {
                 
             } break; case PARCEL_CONN_REJ_KIND: {
                 ap2p_log(INFO": recieved a CONN_REJ parcel\n");
+                unsigned char rej_parcel[PARCEL_CONN_REJ_LEN];
+                if ( recv_parcel(incoming_sock, rej_parcel, PARCEL_CONN_REJ_LEN) ) { continue; }
+
+                long peer_id = 0;
+                unpack_long(peer_id, rej_parcel+1);
+
+                ap2p_log(DEBUG": peer with ID %ld rejected conn req\n", peer_id);
+                
+                sqlite3_stmt *update_stmt;
+                const char* update_sql = "UPDATE Connections SET updated_at=(strftime('%s', 'now')), status=-1 WHERE peer_id=(?);";
+                if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) {
+                    continue;
+                }
+                
+                if ( sqlite3_bind_int64(update_stmt, 1, peer_id) != SQLITE_OK ) {
+                    ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
+                    continue;
+                }
+                
+                if ( sqlite3_step(update_stmt) != SQLITE_DONE ) {
+                    ap2p_log(FAILED_STMT_STEP_ERR_MSG);
+                    continue;
+                }
+                sqlite3_finalize(update_stmt);
+                ap2p_log(DEBUG": updated conn to 'rejected' where peer_id=%ld\n", peer_id);
+                
             } break; case PARCEL_CONN_ACC_KIND: {
                 ap2p_log(INFO": recieved a CONN_ACC parcel\n");
+                unsigned char acc_parcel[PARCEL_CONN_ACC_LEN];
+                if ( recv_parcel(incoming_sock, acc_parcel, PARCEL_CONN_ACC_LEN) ) { continue; }
+
+                long peer_id = 0;
+                unpack_long(peer_id, acc_parcel+1);
+                
+                long self_id = 0;
+                unpack_long(self_id, acc_parcel+9);
+                
+                char peer_name[MAX_HOST_NAME] = {0};
+                strncpy(peer_name, (char*)acc_parcel+17, MAX_HOST_NAME);
+                
+                ap2p_log(DEBUG": peer with ID %ld accepted conn req with self_id: %ld and peer_name: %s\n", peer_id, self_id, peer_name);
+                
+                sqlite3_stmt *update_stmt;
+                const char* update_sql = "UPDATE Connections SET self_id=(?), peer_name=(?), updated_at=(strftime('%s', 'now')), status=0 WHERE peer_id=(?);";
+                if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) {
+                    continue;
+                }
+                
+                if ( sqlite3_bind_int64(update_stmt, 1, peer_id) != SQLITE_OK ) {
+                    ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
+                    continue;
+                }
+                int bind_fail = 0;
+                bind_fail |= (sqlite3_bind_int64(update_stmt, 1, self_id) != SQLITE_OK);
+                bind_fail |= (sqlite3_bind_text(update_stmt, 2, peer_name, strlen(peer_name), SQLITE_STATIC) != SQLITE_OK);
+                bind_fail |= (sqlite3_bind_int64(update_stmt, 3, peer_id) != SQLITE_OK);
+                if ( bind_fail ) {
+                    ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
+                    continue;
+                }
+                
+                if ( sqlite3_step(update_stmt) != SQLITE_DONE ) {
+                    ap2p_log(FAILED_STMT_STEP_ERR_MSG);
+                    continue;
+                }
+                sqlite3_finalize(update_stmt);
+                ap2p_log(DEBUG": updated conn to 'accepted' where peer_id=%ld\n", peer_id);
+                
             } break; default:
                 ap2p_log(WARN": invalid parcel kind: %d\n", parcel_kind);
         }
