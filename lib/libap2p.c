@@ -23,7 +23,7 @@
 #define NET_ERR(addr, port) (addr), (port), strerror(errno)
 
 #define FAILED_DB_OPEN_ERR_MSG ERROR": could not open database at '%s'\n", DB_FILE
-#define FAILED_PREPARE_STMT_ERR_MSG(stmt) ERROR": failed to prepare statement [%s]; "SQL_ERR_FMT"\n", sqlite3_sql((*stmt)), SQL_ERR(db)
+#define FAILED_PREPARE_STMT_ERR_MSG(sql) ERROR": failed to prepare statement from '%s', "SQL_ERR_FMT"\n", (sql), SQL_ERR(db)
 #define FAILED_STMT_STEP_ERR_MSG ERROR": failed while evaluating the statement; "SQL_ERR_FMT"\n", SQL_ERR(db)
 #define FAILED_PARAM_BIND_ERR_MSG ERROR": failed to bind parameters; "SQL_ERR_FMT"\n", SQL_ERR(db)
 
@@ -225,6 +225,10 @@ sqlite3* open_db() {
     return db;
 }
 int prepare_sql_statement(sqlite3* db, sqlite3_stmt** stmt, const char* sql, int create_table(sqlite3*)) {
+    if (sql[strlen(sql)-1] != ';') {
+        printf(WARN": no semicolon at the end of the sql\n");
+    }
+
     int res;
     res = sqlite3_prepare_v2(db, sql, -1, stmt, NULL);
     if ( res != SQLITE_OK && startswith(sqlite3_errmsg(db), "no such table") ) {
@@ -235,7 +239,7 @@ int prepare_sql_statement(sqlite3* db, sqlite3_stmt** stmt, const char* sql, int
         }
     }
     if ( res != SQLITE_OK ) {
-        ap2p_log(FAILED_PREPARE_STMT_ERR_MSG(stmt));
+        ap2p_log(FAILED_PREPARE_STMT_ERR_MSG(sql));
         return -1;
     }
     
@@ -249,7 +253,7 @@ int create_state_table(sqlite3* db) {
     const char* create_state_sql = ""
     "CREATE TABLE State ("
         "pair_id INTEGER PRIMARY KEY, "
-        "key TEXT UNIQUE, "
+        "key TEXT, "
         "value TEXT"
     ");";
     if ( sqlite3_exec(db, create_state_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
@@ -258,7 +262,7 @@ int create_state_table(sqlite3* db) {
         return -1;
     }
     
-    char self_addr[NI_MAXHOST] = {0};
+    char self_addr[MAX_IP_ADDR_LEN] = {0};
     { // get self addr
         struct ifaddrs *ifaddr;
         if (getifaddrs(&ifaddr) == -1) {
@@ -315,7 +319,7 @@ int create_state_table(sqlite3* db) {
 // TODO: consider an interface akin to 'state_get_many()' for multiple keys at once
 char* state_get(sqlite3* db, char* key) {    
     sqlite3_stmt* get_stmt;
-    char* get_sql = "SELECT value FROM State WHERE key=?";
+    char* get_sql = "SELECT value FROM State WHERE key=?;";
     if ( prepare_sql_statement(db, &get_stmt, get_sql, &create_state_table) != SQLITE_OK ) { return NULL; }
     
     if ( sqlite3_bind_text(get_stmt, 1, key, strlen(key), SQLITE_STATIC) != SQLITE_OK ) {
@@ -481,7 +485,6 @@ int ap2p_request_connection(char* peer_addr, int peer_port) {
             goto exit_err_db;
         }
         sqlite3_finalize(insert_stmt);
-        sqlite3_close(db);
     } // end inserting the conn into the db
     
     char self_name[MAX_HOST_NAME];
@@ -519,6 +522,8 @@ int ap2p_request_connection(char* peer_addr, int peer_port) {
     } else {
         ap2p_log(INFO": could not send connection request to peer at %s:%d; \x1b[33mconnection is pending\x1b[0m\n", peer_addr, peer_port);
     }
+    
+    sqlite3_close(db);
     return 0;
     
     exit_err_db:
