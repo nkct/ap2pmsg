@@ -56,7 +56,7 @@ for (int i=0;i<4;i++) {          \
     (d) = ((d) << 8) + (buf)[i]; \
 }
 
-inline int send_parcel(unsigned char* parcel, unsigned long parcel_len, char* addr, int port) {
+extern inline int send_parcel(unsigned char* parcel, unsigned long parcel_len, char* addr, int port) {
     if (parcel_len == 0) { return 0; }
     
     ap2p_log(DEBUG": sending parcel: [");
@@ -93,7 +93,7 @@ inline int send_parcel(unsigned char* parcel, unsigned long parcel_len, char* ad
     
     return 0;
 }
-inline int recv_parcel(int sock, unsigned char* parcel, unsigned long parcel_len) {
+extern inline int recv_parcel(int sock, unsigned char* parcel, unsigned long parcel_len) {
     if (recv(sock, parcel, parcel_len, 0) < parcel_len) {
         ap2p_log(WARN": could not read parcel contents; %s\n", strerror(errno));
         return -1;
@@ -110,12 +110,12 @@ inline int recv_parcel(int sock, unsigned char* parcel, unsigned long parcel_len
 
 // ============= Database Handling ==================
 // logs every executed sql query, set in open_db()
-inline int trace_callback(unsigned int T, void* C, void* P, void* X) {
+extern inline int trace_callback(unsigned int T, void* C, void* P, void* X) {
     ap2p_log(DEBUG": executing query: '%s'\n", sqlite3_expanded_sql((sqlite3_stmt*)P));
     return 0;
 }
 
-inline sqlite3* open_db() {
+extern inline sqlite3* open_db() {
     sqlite3* db;
     if ( sqlite3_open(DB_FILE, &db) ) {
         ap2p_log(FAILED_DB_OPEN_ERR_MSG);
@@ -125,7 +125,7 @@ inline sqlite3* open_db() {
     
     return db;
 }
-inline int prepare_sql_statement(sqlite3* db, sqlite3_stmt** stmt, const char* sql, int create_table(sqlite3*)) {
+extern inline int prepare_sql_statement(sqlite3* db, sqlite3_stmt** stmt, const char* sql, int create_table(sqlite3*)) {
     if (sql[strlen(sql)-1] != ';') {
         printf(WARN": no semicolon at the end of the sql\n");
     }
@@ -148,7 +148,7 @@ inline int prepare_sql_statement(sqlite3* db, sqlite3_stmt** stmt, const char* s
 }
 // ==================================================
 
-inline long generate_id() {
+extern inline long generate_id() {
     // TODO: more sophisticated peer_id generation
     // which would ensure non-repeatability
     srandom(time(NULL));

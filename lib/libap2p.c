@@ -183,7 +183,18 @@ int create_state_table(sqlite3* db) {
 
 // remember to free value, this functions allocs
 // TODO: consider an interface akin to 'state_get_many()' for multiple keys at once
-char* state_get(sqlite3* db, const char* key) {    
+char* ap2p_state_get(sqlite3* db, const char* key) {  
+    bool db_null = 0;
+    if ( db == NULL ) {
+        db_null = 1;
+        
+        db = open_db();
+        if ( db == NULL ) { 
+            ap2p_log(ERROR": did not pass in a db connection to state_get, and opening a new one failed\n");
+            return NULL;
+        }
+    }
+    
     sqlite3_stmt* get_stmt;
     const char* get_sql = "SELECT value FROM State WHERE key=?;";
     if ( prepare_sql_statement(db, &get_stmt, get_sql, &create_state_table) != SQLITE_OK ) { return NULL; }
@@ -202,6 +213,10 @@ char* state_get(sqlite3* db, const char* key) {
         return NULL;
     }
     sqlite3_finalize(get_stmt);
+    
+    if ( db_null ) {
+        sqlite3_close(db);
+    }
     
     return value;
 }
@@ -343,15 +358,15 @@ int ap2p_request_connection(char* peer_addr, int peer_port) {
         sqlite3_finalize(insert_stmt);
     } // end inserting the conn into the db
     
-    char* self_name = state_get(db, "self_name");
+    char* self_name = ap2p_state_get(db, "self_name");
     
-    char* self_addr = state_get(db, "self_addr");
+    char* self_addr = ap2p_state_get(db, "self_addr");
     if ( self_addr == NULL ) {
         printf(ERROR": failed to retrieve self_addr from the State table\n");
         goto exit_err_db;
     }
     
-    char* self_port_str = state_get(db, "self_port");
+    char* self_port_str = ap2p_state_get(db, "self_port");
     if ( self_port_str == NULL ) {
         printf(ERROR": failed to retrieve self_port from the State table\n");
         goto exit_err_db;
@@ -466,7 +481,7 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
         }
     } else { // accepted
         long peer_id = generate_id();
-        char* self_name = state_get(db, "self_name");
+        char* self_name = ap2p_state_get(db, "self_name");
         
         { // update conn in db
             sqlite3_stmt *update_stmt;
@@ -559,7 +574,7 @@ int ap2p_listen() {
       goto exit_err_net;
     }
     
-    char* self_port_str = state_get(db, "self_port");
+    char* self_port_str = ap2p_state_get(db, "self_port");
     if ( self_port_str == NULL ) {
         printf(ERROR": failed to retrieve self_port from the State table\n");
         goto exit_err_db;
@@ -573,7 +588,7 @@ int ap2p_listen() {
         goto exit_err_db;
     }
     
-    char* listen_addr = state_get(db, "listen_addr");
+    char* listen_addr = ap2p_state_get(db, "listen_addr");
     if ( listen_addr == NULL ) {
         printf(ERROR": failed to retrieve listen_addr from the State table\n");
         goto exit_err_db;
@@ -781,7 +796,10 @@ int ap2p_listen() {
         return -1;
 }
 
-// this exposes strlen to anybody binding libap2p, in a self-contained way
-inline unsigned long ap2p_strlen(const char* s) {
+// expose strlen and free to anybody binding libap2p, in a self-contained way
+unsigned long ap2p_strlen(const char* s) {
     return strlen(s);
+}
+void ap2p_free(void* p) {
+    free(p);
 }

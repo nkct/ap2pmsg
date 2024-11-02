@@ -79,7 +79,7 @@ fn main() -> Result<(), isize> {
                 }
                 "r" | "-r" | "request" | "--request" => { 
                     let addr_port = next_arg()?;
-                    if let Some((addr_str, port_str)) = addr_port.split_once(":") {
+                    if let Some((addr, port_str)) = addr_port.split_once(":") {
                         let port;
                         if let Ok(p) = port_str.parse::<i32>() {
                             port = p;
@@ -87,8 +87,6 @@ fn main() -> Result<(), isize> {
                             log!("ERROR: <PORT> must be a valid integer");
                             return Err(-1);
                         }
-                        
-                        let addr = &format!("{addr_str}\0"); // ensure addr is null terminated
                         
                         println!("ADDR: {addr}"); 
                         println!("PORT: {port}"); 
@@ -148,6 +146,23 @@ fn main() -> Result<(), isize> {
         "listen" | "l" => {
             let res = libap2p::listen();
             println!("Finished listening with {}", res);
+        }
+        "state" => {
+            match next_arg()?.as_str() {
+                "g" | "get" => {
+                    let key = next_arg()?;
+                    if let Some(vaule) = libap2p::state_get(&key) {
+                        println!("[STATE] {}: {}", key, vaule);
+                    } else {
+                        log!("ERROR: failed to get '{key}' from State");
+                        return Err(-1);
+                    }
+                }
+                subcommand => {
+                    log!("ERROR: '{subcommand}' is not a recognized subcommand for {command}, see `{prog_path} help` for usage info");
+                    return Err(-1);
+                }
+            }
         }
         "h" | "help" | "-h"    | "--help"                     => { 
             println!("Usage: {prog_path} [conn | conns | connection | connections] [l | -l | list    | --list   ]");
