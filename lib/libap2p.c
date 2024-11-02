@@ -118,7 +118,7 @@ int create_state_table(sqlite3* db) {
     const char* create_state_sql = ""
     "CREATE TABLE State ("
         "pair_id INTEGER PRIMARY KEY, "
-        "key TEXT, "
+        "key TEXT UNIQUE, " // consder indexing key
         "value TEXT"
     ");";
     if ( sqlite3_exec(db, create_state_sql, NULL, NULL, &errmsg) != SQLITE_OK ) {
@@ -219,6 +219,48 @@ char* ap2p_state_get(sqlite3* db, const char* key) {
     }
     
     return value;
+}
+
+int ap2p_state_set(sqlite3* db, const char* key, const char* value) {  
+    bool db_null = 0;
+    if ( db == NULL ) {
+        db_null = 1;
+        
+        db = open_db();
+        if ( db == NULL ) { 
+            ap2p_log(ERROR": did not pass in a db connection to state_get, and opening a new one failed\n");
+            return -1;
+        }
+    }
+    
+    sqlite3_stmt* set_stmt;
+    const char* set_sql = ""
+    "INSERT INTO State (key, value) "
+    "VALUES(?, ?) "
+    "ON CONFLICT "
+    "DO UPDATE SET value=?;";
+    if ( prepare_sql_statement(db, &set_stmt, set_sql, &create_state_table) != SQLITE_OK ) { return NULL; }
+    
+    int bind_fail = 0;
+    bind_fail |= (sqlite3_bind_text(set_stmt, 1, key,   strlen(key),   SQLITE_STATIC) != SQLITE_OK);
+    bind_fail |= (sqlite3_bind_text(set_stmt, 2, value, strlen(value), SQLITE_STATIC) != SQLITE_OK);
+    bind_fail |= (sqlite3_bind_text(set_stmt, 3, value, strlen(value), SQLITE_STATIC) != SQLITE_OK);
+    if ( bind_fail ) {
+        ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
+        return -1;
+    }
+    
+    if ( sqlite3_step(set_stmt) != SQLITE_DONE ) {
+        ap2p_log(FAILED_STMT_STEP_ERR_MSG);
+        return -1;
+    }
+    sqlite3_finalize(set_stmt);
+    
+    if ( db_null ) {
+        sqlite3_close(db);
+    }
+    
+    return 0;
 }
 
 // non-zero on error

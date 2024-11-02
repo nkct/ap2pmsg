@@ -1,6 +1,11 @@
 #![allow(dead_code)]
 
-use std::{ffi::{c_char, c_void, CStr, CString}, ptr, slice, str};
+use std::{
+    ffi::{c_char, c_void, CStr, CString}, 
+    ptr, 
+    slice, 
+    str
+};
 
 #[link(name = "ap2p")]
 #[link(name = "sqlite3")]
@@ -14,6 +19,7 @@ extern "C" {
     fn ap2p_decide_on_connection(conn_id: u64, decison: i32) -> i32;
     fn ap2p_listen() -> i32;
     fn ap2p_state_get(db: *const c_void, key: *const c_char) -> *const c_char;
+    fn ap2p_state_set(db: *const c_void, key: *const c_char, value: *const c_char) -> i32;
 }
 
 #[repr(i8)]
@@ -133,5 +139,14 @@ pub fn state_get(key: &str) -> Option<String> {
         let value = CStr::from_ptr(value_ptr).to_str().expect("value not valid &str").to_owned();
         ap2p_free(value_ptr as *const c_void);
         return Some(value);
+    }
+}
+
+pub fn state_set(key: &str, value: &str) -> i32 {
+    unsafe { 
+        let key_c = CString::new(key).expect("key not valid CString");
+        let value_c = CString::new(value).expect("value not valid CString");
+        
+        return ap2p_state_set(ptr::null(), key_c.as_ptr(), value_c.as_ptr());
     }
 }

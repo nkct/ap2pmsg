@@ -151,12 +151,18 @@ fn main() -> Result<(), isize> {
             match next_arg()?.as_str() {
                 "g" | "get" => {
                     let key = next_arg()?;
-                    if let Some(vaule) = libap2p::state_get(&key) {
-                        println!("[STATE] {}: {}", key, vaule);
+                    if let Some(value) = libap2p::state_get(&key) {
+                        println!("[STATE] {}: {}", key, value);
                     } else {
                         log!("ERROR: failed to get '{key}' from State");
                         return Err(-1);
                     }
+                }
+                "s" | "set" => {
+                    let key = next_arg()?;
+                    let value = next_arg()?;
+                    let res = libap2p::state_set(&key, &value);
+                    println!("state_set result: {res}"); 
                 }
                 subcommand => {
                     log!("ERROR: '{subcommand}' is not a recognized subcommand for {command}, see `{prog_path} help` for usage info");
