@@ -15,11 +15,11 @@ extern "C" {
     fn ap2p_list_connections(buf: *const Connection, buf_len: &i32) -> i32;
     fn ap2p_list_messages(buf: *const Message, buf_len: &i32) -> i32;
     fn ap2p_request_connection(addr: *const c_char, port: i32) -> i32;
-    fn ap2p_select_connection(conn_id: u64) -> i32;
     fn ap2p_decide_on_connection(conn_id: u64, decison: i32) -> i32;
     fn ap2p_listen() -> i32;
     fn ap2p_state_get(db: *const c_void, key: *const c_char) -> *const c_char;
     fn ap2p_state_set(db: *const c_void, key: *const c_char, value: *const c_char) -> i32;
+    fn ap2p_send_message(content_type: u8, content_len: i32, content: *const u8) -> i32;
 }
 
 #[repr(i8)]
@@ -117,11 +117,15 @@ pub fn request_connection(addr: &str, port: i32) -> i32 {
 }
 
 pub fn select_connection(conn_id: u64) -> i32 {
-    return unsafe { ap2p_select_connection(conn_id) }
+    return state_set("selected_conn", &conn_id.to_string());
 }
 
 pub fn decide_on_connection(conn_id: u64, decision: i32) -> i32 {
     return unsafe { ap2p_decide_on_connection(conn_id, decision) }
+}
+
+pub fn send_text_message(text: &str) -> i32 {
+    return unsafe { ap2p_send_message(0, text.len() as i32, text.as_ptr()) }
 }
 
 pub fn listen() -> i32 {

@@ -131,7 +131,9 @@ fn main() -> Result<(), isize> {
                 }
                 "s" | "-s" | "send" | "--send" => { 
                     let msg = next_arg()?;
-                    println!("MSG: {msg}"); todo!("sending a message")
+                    println!("MSG: {msg}"); 
+                    let res = libap2p::send_text_message(&msg);
+                    println!("send_text_message result: {res}"); 
                 }
                 "b" | "-b" | "bulk" | "--bulk" => { 
                     let msgs = next_arg()?;

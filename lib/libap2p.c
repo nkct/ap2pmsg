@@ -31,6 +31,9 @@
 #define PARCEL_CONN_ACC_KIND 4 // accept conn request
 #define PARCEL_CONN_ACC_LEN 81 // kind[1] + self_id[8] + peer_id[8] + self_name[64]
 
+#define PARCEL_MSG_SEND_KIND 10 // send msg
+#define PARCEL_MSG_SEND_HDR_LEN 14 // kind[1] + self_id[8] + content_type[1] + content_len[4] // add content_len separately
+
 typedef enum ConnStatus {
     rejected    = -1, // the peer has reviewed this connection request and rejected it
     accepted    =  0, // this connection has been accepted and can be used to send and recieve messages
@@ -54,12 +57,16 @@ typedef struct Connection {
     char status; // see ConnStatus
 } Connection;
 
+typedef enum MsgContentType {
+    text = 0,
+} MsgContentType;
+
 typedef struct Message {
     long msg_id;
     long conn_id;
     long time_sent;
-    long time_recieved;
-    unsigned char content_type;
+    long time_recieved; // 0 on pending
+    unsigned char content_type; // see MsgContentType
     int content_len;
     const unsigned char* content;
 } Message;
@@ -98,7 +105,7 @@ int create_msg_table(sqlite3* db) {
         "msg_id INTEGER PRIMARY KEY, "
         "conn_id INTEGER, "
         "time_sent INTEGER DEFAULT (strftime('%s', 'now')), "
-        "time_recieved INTEGER, "
+        "time_recieved INTEGER, " // time_recieved determines msg status, if null, msg is pending
         "content_type INTEGER NOT NULL, "
         "content BLOB, "
         "FOREIGN KEY (conn_id) REFERENCES Connections(conn_id)"
@@ -574,30 +581,81 @@ int ap2p_decide_on_connection(long conn_id, int decision) {
         return -1;
 }
 
-int ap2p_select_connection(long conn_id) {
+int ap2p_send_message(unsigned char content_type, int content_len, unsigned char* content) {
     sqlite3 *db = open_db();
     if ( db == NULL ) { goto exit_err; }
     
-    int res;
-    sqlite3_stmt *update_stmt;
-    const char* update_sql = "UPDATE State SET value=(?) WHERE key='selected_conn';";
-    if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_state_table) ) {
-        goto exit_err_db;
-    }
+    sqlite3_stmt* insert_stmt;
+    char* insert_sql = ""
+    "INSERT INTO Messages "
+    "(conn_id, content_type, content) VALUES "
+    "("
+        "(SELECT value FROM State WHERE key='selected_conn'), "
+        "?, "
+        "?"
+    ");";
+    if ( prepare_sql_statement(db, &insert_stmt, insert_sql, &create_msg_table) ) { goto exit_err_db; }
     
-    if ( (res = sqlite3_bind_int64(update_stmt, 1, conn_id)) != SQLITE_OK ) {
+    if ( 
+        sqlite3_bind_int(insert_stmt, 1, content_type) != SQLITE_OK ||
+        sqlite3_bind_blob(insert_stmt, 2, content, content_len, SQLITE_STATIC) != SQLITE_OK
+    ) {
         ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
-        goto exit_err_db;
+        return -1;
     }
         
-    if ( sqlite3_step(update_stmt) != SQLITE_DONE ) {
+    if ( sqlite3_step(insert_stmt) != SQLITE_DONE ) {
         ap2p_log(FAILED_STMT_STEP_ERR_MSG);
-        goto exit_err_db;
+        return -1;
     }
-    sqlite3_finalize(update_stmt);
+    sqlite3_finalize(insert_stmt);
     
-    sqlite3_close(db);
-    return 0;
+    long self_id;
+    char peer_addr[MAX_IP_ADDR_LEN] = {0};
+    int peer_port;
+    char peer_name[MAX_HOST_NAME] = {0};
+    
+    sqlite3_stmt* select_stmt;
+    char* select_sql = ""
+    "SELECT status, self_id, peer_addr, peer_port, peer_name FROM Connections "
+    "WHERE conn_id = (SELECT value FROM State WHERE key='selected_conn');";
+    if ( prepare_sql_statement(db, &select_stmt, select_sql, &create_msg_table) ) { goto exit_err_db; }
+    
+    if ( sqlite3_step(select_stmt) == SQLITE_ROW ) {
+        int status = sqlite3_column_int(select_stmt, 0);
+        if ( status != accepted ) {
+            ap2p_log(ERROR": attempted to send on connection which wasn't in the accepted state\n");
+            goto exit_err_db;
+        }
+        
+        self_id = sqlite3_column_int64(select_stmt, 1);
+        
+        strcpy(peer_addr, (char*)sqlite3_column_text(select_stmt, 2));
+        
+        peer_port = sqlite3_column_int(select_stmt, 3);
+        
+        char* pname_ptr = (char*)sqlite3_column_text(select_stmt, 4);
+        strcpy(peer_name, (char*)pname_ptr);
+    } else {
+        ap2p_log(FAILED_STMT_STEP_ERR_MSG);
+        return NULL;
+    }
+    sqlite3_finalize(select_stmt);
+    
+    {
+        unsigned char parcel[PARCEL_MSG_SEND_HDR_LEN + content_len];
+        parcel[0] = PARCEL_MSG_SEND_KIND;
+        pack_long(parcel+1, self_id);
+        parcel[9] = content_type;
+        pack_int(parcel+10, content_len);
+        memcpy(parcel+14, content, content_len);
+        
+        if ( send_parcel(parcel, PARCEL_MSG_SEND_HDR_LEN + content_len, peer_addr, peer_port) == 0 ) {
+            ap2p_log(INFO": sent message of type %d to peer '%s'\n", content_type, peer_name);
+        } else {
+            ap2p_log(INFO": could not send message of type %d to peer '%s'; \x1b[33mmessage is pending\x1b[0m\n", content_type, peer_name);
+        }
+    }
     
     exit_err_db:
         sqlite3_close(db);
