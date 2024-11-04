@@ -32,6 +32,7 @@
 #define PARCEL_CONN_ACC_LEN 81 // kind[1] + self_id[8] + peer_id[8] + self_name[64]
 
 #define PARCEL_MSG_SEND_KIND 10 // send msg
+// add time_sent
 #define PARCEL_MSG_SEND_HDR_LEN 14 // kind[1] + self_id[8] + content_type[1] + content_len[4] // add content_len separately
 
 typedef enum ConnStatus {
@@ -634,8 +635,7 @@ int ap2p_send_message(unsigned char content_type, int content_len, unsigned char
         
         peer_port = sqlite3_column_int(select_stmt, 3);
         
-        char* pname_ptr = (char*)sqlite3_column_text(select_stmt, 4);
-        strcpy(peer_name, (char*)pname_ptr);
+        strcpy(peer_name, (char*)sqlite3_column_text(select_stmt, 4));
     } else {
         ap2p_log(FAILED_STMT_STEP_ERR_MSG);
         return NULL;
@@ -877,6 +877,94 @@ int ap2p_listen() {
                 }
                 sqlite3_finalize(update_stmt);
                 ap2p_log(DEBUG": updated conn to 'accepted' where peer_id=%ld\n", peer_id);
+            } break; case PARCEL_MSG_SEND_KIND: {
+                ap2p_log(INFO": recieved a MSG_SEND parcel\n");
+                
+                unsigned char send_parcel_hdr[PARCEL_MSG_SEND_HDR_LEN];
+                if ( recv_parcel(incoming_sock, send_parcel_hdr, PARCEL_MSG_SEND_HDR_LEN) ) { continue; }
+                
+                long peer_id = 0;
+                unsigned char content_type;
+                int content_len = 0;
+                {
+                    unpack_long(peer_id, send_parcel_hdr+1);
+                    content_type = send_parcel_hdr[9];
+                    unpack_int(content_len, send_parcel_hdr+10)
+                }
+                ap2p_log(DEBUG": msg_send header, peer_id: %ld, content_type: %d, content_len: %d\n", peer_id, content_type, content_len);
+                
+                char peer_addr[MAX_IP_ADDR_LEN] = {0};
+                int peer_port;
+                char peer_name[MAX_HOST_NAME] = {0};
+                {
+                    sqlite3_stmt* select_stmt;
+                    char* select_sql = ""
+                    "SELECT status, peer_addr, peer_port, peer_name FROM Connections "
+                    "WHERE peer_id = ?;";
+                    if ( prepare_sql_statement(db, &select_stmt, select_sql, &create_msg_table) ) { goto exit_err_db; }
+                    
+                    if ( sqlite3_bind_int64(select_stmt, 1, peer_id) != SQLITE_OK ) {
+                        ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
+                        return -1;
+                    }
+                    
+                    if ( sqlite3_step(select_stmt) == SQLITE_ROW ) {
+                        int status = sqlite3_column_int(select_stmt, 0);
+                        if ( status != accepted ) {
+                            ap2p_log(ERROR": attempted to recieve message on connection which wasn't in the accepted state\n");
+                            goto exit_err_db;
+                        }
+                        
+                        strcpy(peer_addr, (char*)sqlite3_column_text(select_stmt, 1));
+                        
+                        peer_port = sqlite3_column_int(select_stmt, 2);
+                        
+                        strcpy(peer_name, (char*)sqlite3_column_text(select_stmt, 3));
+                    } else {
+                        ap2p_log(FAILED_STMT_STEP_ERR_MSG);
+                        return NULL;
+                    }
+                    sqlite3_finalize(select_stmt);
+                }
+                
+                ap2p_log(INFO": recieved message of type %d from peer '%s'\n", content_type, peer_name);
+                
+                unsigned char content[content_len];
+                if ( recv(incoming_sock, content, content_len, 0) < content_len ) {
+                    ap2p_log(ERROR": failed to read message contents\n");
+                    continue;
+                }
+                
+                {
+                    sqlite3_stmt* insert_stmt;
+                    char* insert_sql = ""
+                    "INSERT INTO Messages "
+                    "(conn_id, time_recieved, content_type, content) VALUES "
+                    "("
+                        "(SELECT conn_id FROM Connections WHERE peer_id=?), "
+                        "(strftime('%s', 'now')), "
+                        "?, "
+                        "?"
+                    ");";
+                    if ( prepare_sql_statement(db, &insert_stmt, insert_sql, &create_msg_table) ) { goto exit_err_db; }
+                    
+                    if ( 
+                        sqlite3_bind_int64(insert_stmt, 1, peer_id) != SQLITE_OK ||
+                        sqlite3_bind_int(insert_stmt, 2, content_type) != SQLITE_OK ||
+                        sqlite3_bind_blob(insert_stmt, 3, content, content_len, SQLITE_STATIC) != SQLITE_OK
+                    ) {
+                        ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
+                        return -1;
+                    }
+                        
+                    if ( sqlite3_step(insert_stmt) != SQLITE_DONE ) {
+                        ap2p_log(FAILED_STMT_STEP_ERR_MSG);
+                        return -1;
+                    }
+                    sqlite3_finalize(insert_stmt);
+                }
+                
+                // TODO: ack the msg
                 
             } break; default:
                 ap2p_log(WARN": invalid parcel kind: %d\n", parcel_kind);
