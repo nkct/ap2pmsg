@@ -18,6 +18,7 @@
 #define DEFAULT_PORT "7676"
 #define DEFAULT_NAME "the_pear_of_adam"
 
+// TODO: parcels should probably be represented with structs, so that you don't have to remember their offsets each time
 // IDs and names are from the perspective of the sender
 #define PARCEL_CONN_REQ_KIND 1 // request conn
 #define PARCEL_CONN_REQ_LEN 93 // kind[1] + peer_id[8] + self_name[64] + self_addr[16] + self_port[4]
@@ -32,8 +33,7 @@
 #define PARCEL_CONN_ACC_LEN 81 // kind[1] + self_id[8] + peer_id[8] + self_name[64]
 
 #define PARCEL_MSG_SEND_KIND 10 // send msg
-// add time_sent
-#define PARCEL_MSG_SEND_HDR_LEN 14 // kind[1] + self_id[8] + content_type[1] + content_len[4] // add content_len separately
+#define PARCEL_MSG_SEND_HDR_LEN 22 // kind[1] + self_id[8] + time_sent[8] + content_type[1] + content_len[4] // add content_len separately
 
 typedef enum ConnStatus {
     rejected    = -1, // the peer has reviewed this connection request and rejected it
@@ -615,10 +615,13 @@ int ap2p_send_message(unsigned char content_type, int content_len, unsigned char
     char peer_addr[MAX_IP_ADDR_LEN] = {0};
     int peer_port;
     char peer_name[MAX_HOST_NAME] = {0};
+    long time_sent;
     
     sqlite3_stmt* select_stmt;
     char* select_sql = ""
-    "SELECT status, self_id, peer_addr, peer_port, peer_name FROM Connections "
+    "SELECT status, self_id, peer_addr, peer_port, peer_name "
+    "(SELECT time_sent FROM Messages ORDER BY time_sent DESC LIMIT 1) " // should probably use shared_msg_id instead
+    "FROM Connections "
     "WHERE conn_id = (SELECT value FROM State WHERE key='selected_conn');";
     if ( prepare_sql_statement(db, &select_stmt, select_sql, &create_msg_table) ) { goto exit_err_db; }
     
@@ -636,6 +639,8 @@ int ap2p_send_message(unsigned char content_type, int content_len, unsigned char
         peer_port = sqlite3_column_int(select_stmt, 3);
         
         strcpy(peer_name, (char*)sqlite3_column_text(select_stmt, 4));
+        
+        time_sent = sqlite3_column_int64(select_stmt, 5);
     } else {
         ap2p_log(FAILED_STMT_STEP_ERR_MSG);
         return NULL;
@@ -646,9 +651,10 @@ int ap2p_send_message(unsigned char content_type, int content_len, unsigned char
         unsigned char parcel[PARCEL_MSG_SEND_HDR_LEN + content_len];
         parcel[0] = PARCEL_MSG_SEND_KIND;
         pack_long(parcel+1, self_id);
-        parcel[9] = content_type;
-        pack_int(parcel+10, content_len);
-        memcpy(parcel+14, content, content_len);
+        pack_long(parcel+9, time_sent);
+        parcel[17] = content_type;
+        pack_int(parcel+18, content_len);
+        memcpy(parcel+22, content, content_len);
         
         if ( send_parcel(parcel, PARCEL_MSG_SEND_HDR_LEN + content_len, peer_addr, peer_port) == 0 ) {
             ap2p_log(INFO": sent message of type %d to peer '%s'\n", content_type, peer_name);
@@ -884,12 +890,14 @@ int ap2p_listen() {
                 if ( recv_parcel(incoming_sock, send_parcel_hdr, PARCEL_MSG_SEND_HDR_LEN) ) { continue; }
                 
                 long peer_id = 0;
+                long time_sent = 0;
                 unsigned char content_type;
                 int content_len = 0;
                 {
                     unpack_long(peer_id, send_parcel_hdr+1);
-                    content_type = send_parcel_hdr[9];
-                    unpack_int(content_len, send_parcel_hdr+10)
+                    unpack_long(time_sent, send_parcel_hdr+9);
+                    content_type = send_parcel_hdr[17];
+                    unpack_int(content_len, send_parcel_hdr+18)
                 }
                 ap2p_log(DEBUG": msg_send header, peer_id: %ld, content_type: %d, content_len: %d\n", peer_id, content_type, content_len);
                 
@@ -939,9 +947,10 @@ int ap2p_listen() {
                     sqlite3_stmt* insert_stmt;
                     char* insert_sql = ""
                     "INSERT INTO Messages "
-                    "(conn_id, time_recieved, content_type, content) VALUES "
+                    "(conn_id, time_sent, time_recieved, content_type, content) VALUES "
                     "("
                         "(SELECT conn_id FROM Connections WHERE peer_id=?), "
+                        "?, "
                         "(strftime('%s', 'now')), "
                         "?, "
                         "?"
@@ -950,8 +959,9 @@ int ap2p_listen() {
                     
                     if ( 
                         sqlite3_bind_int64(insert_stmt, 1, peer_id) != SQLITE_OK ||
-                        sqlite3_bind_int(insert_stmt, 2, content_type) != SQLITE_OK ||
-                        sqlite3_bind_blob(insert_stmt, 3, content, content_len, SQLITE_STATIC) != SQLITE_OK
+                        sqlite3_bind_int64(insert_stmt, 2, time_sent) != SQLITE_OK ||
+                        sqlite3_bind_int(insert_stmt, 3, content_type) != SQLITE_OK ||
+                        sqlite3_bind_blob(insert_stmt, 4, content, content_len, SQLITE_STATIC) != SQLITE_OK
                     ) {
                         ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
                         return -1;
