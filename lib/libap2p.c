@@ -35,6 +35,9 @@
 #define PARCEL_MSG_SEND_KIND 10 // send msg
 #define PARCEL_MSG_SEND_HDR_LEN 30 // kind[1] + self_id[8] + shared_msg_id[8] + time_sent[8] + content_type[1] + content_len[4] // add content_len separately
 
+#define PARCEL_MSG_ACK_KIND  11
+#define PARCEL_MSG_ACK_LEN 25 // kind[1] + self_id[8] + shared_msg_id[8] + time_recieved[8]
+
 typedef enum ConnStatus {
     rejected    = -1, // the peer has reviewed this connection request and rejected it
     accepted    =  0, // this connection has been accepted and can be used to send and recieve messages
@@ -106,7 +109,7 @@ int create_msg_table(sqlite3* db) {
     "CREATE TABLE Messages ("
         "msg_id INTEGER PRIMARY KEY, "
         "conn_id INTEGER, "
-        "shared_msg_id INTEGER, "
+        "shared_msg_id INTEGER, " // msg_id is unfit to be shared, and shared_msg_id is unfit to be a PK, so we need both
         "time_sent INTEGER DEFAULT (strftime('%s', 'now')), "
         "time_recieved INTEGER, " // time_recieved determines msg status, if null, msg is pending
         "content_type INTEGER NOT NULL, "
@@ -911,13 +914,14 @@ int ap2p_listen() {
                 }
                 ap2p_log(DEBUG": msg_send header, peer_id: %ld, content_type: %d, content_len: %d\n", peer_id, content_type, content_len);
                 
+                long self_id = 0;
                 char peer_addr[MAX_IP_ADDR_LEN] = {0};
                 int peer_port;
                 char peer_name[MAX_HOST_NAME] = {0};
                 {
                     sqlite3_stmt* select_stmt;
                     char* select_sql = ""
-                    "SELECT status, peer_addr, peer_port, peer_name FROM Connections "
+                    "SELECT status, self_id, peer_addr, peer_port, peer_name FROM Connections "
                     "WHERE peer_id = ?;";
                     if ( prepare_sql_statement(db, &select_stmt, select_sql, &create_msg_table) ) { goto exit_err_db; }
                     
@@ -933,11 +937,13 @@ int ap2p_listen() {
                             goto exit_err_db;
                         }
                         
-                        strcpy(peer_addr, (char*)sqlite3_column_text(select_stmt, 1));
+                        self_id = sqlite3_column_int64(select_stmt, 1);
                         
-                        peer_port = sqlite3_column_int(select_stmt, 2);
+                        strcpy(peer_addr, (char*)sqlite3_column_text(select_stmt, 2));
                         
-                        strcpy(peer_name, (char*)sqlite3_column_text(select_stmt, 3));
+                        peer_port = sqlite3_column_int(select_stmt, 3);
+                        
+                        strcpy(peer_name, (char*)sqlite3_column_text(select_stmt, 4));
                     } else {
                         ap2p_log(FAILED_STMT_STEP_ERR_MSG);
                         return NULL;
@@ -953,6 +959,7 @@ int ap2p_listen() {
                     continue;
                 }
                 
+                long time_recieved = 0;
                 {
                     sqlite3_stmt* insert_stmt;
                     char* insert_sql = ""
@@ -965,7 +972,7 @@ int ap2p_listen() {
                         "(strftime('%s', 'now')), "
                         "?, "
                         "?"
-                    ");";
+                    ") RETURNING time_recieved;";
                     if ( prepare_sql_statement(db, &insert_stmt, insert_sql, &create_msg_table) ) { goto exit_err_db; }
                     
                     if ( 
@@ -979,14 +986,28 @@ int ap2p_listen() {
                         return -1;
                     }
                         
-                    if ( sqlite3_step(insert_stmt) != SQLITE_DONE ) {
+                    if ( sqlite3_step(insert_stmt) == SQLITE_ROW ) {
+                        time_recieved = sqlite3_column_int64(insert_stmt, 0);
+                    } else {
                         ap2p_log(FAILED_STMT_STEP_ERR_MSG);
                         return -1;
                     }
                     sqlite3_finalize(insert_stmt);
                 }
                 
-                // TODO: ack the msg
+                {
+                    unsigned char ack_parcel[PARCEL_MSG_ACK_LEN + content_len];
+                    ack_parcel[0] = PARCEL_MSG_ACK_KIND;
+                    pack_long(ack_parcel+1, self_id);
+                    pack_long(ack_parcel+9, shared_msg_id);
+                    pack_long(ack_parcel+17, time_recieved);
+                    
+                    if ( send_parcel(ack_parcel, PARCEL_MSG_SEND_HDR_LEN + content_len, peer_addr, peer_port) == 0 ) {
+                        ap2p_log(INFO": acknowledged message from peer '%s' at %ld\n", peer_name, time_recieved);
+                    } else {
+                        ap2p_log(INFO": recieved message from peer '%s'; \x1b[33mbut, failed to acknowledge it to the peer\x1b[0m\n", peer_name);
+                    }
+                }
                 
             } break; default:
                 ap2p_log(WARN": invalid parcel kind: %d\n", parcel_kind);
