@@ -79,6 +79,7 @@ pub fn list_connections(max: i32) -> Result<Vec<Connection>, ()> {
 pub struct Message {
     msg_id: i64,
     conn_id: i64,
+    shared_msg_id: i64,
     time_sent: i64,
     time_recieved: i64,
     content_type: u8,
