@@ -145,45 +145,39 @@ fn main() -> Result<(), isize> {
                 }
             }
         }
-        "listen" | "l" => {
+        "l" | "listen" | "await" => {
             let res = libap2p::listen();
             println!("Finished listening with {}", res);
         }
-        "state" => {
-            match next_arg()?.as_str() {
-                "g" | "get" => {
-                    let key = next_arg()?;
-                    if let Some(value) = libap2p::state_get(&key) {
-                        println!("[STATE] {}: {}", key, value);
-                    } else {
-                        log!("ERROR: failed to get '{key}' from State");
-                        return Err(-1);
-                    }
+        "s" | "state" => {
+            let param = next_arg()?;
+            match param.split_once("=") {
+                None => {
+                    let value = libap2p::state_get(&param);
+                    println!("{}: {:?}", param, value);
                 }
-                "s" | "set" => {
-                    let key = next_arg()?;
-                    let value = next_arg()?;
+                Some((key, value)) => {
                     let res = libap2p::state_set(&key, &value);
                     println!("state_set result: {res}"); 
-                }
-                subcommand => {
-                    log!("ERROR: '{subcommand}' is not a recognized subcommand for {command}, see `{prog_path} help` for usage info");
-                    return Err(-1);
                 }
             }
         }
         "h" | "help" | "-h"    | "--help"                     => { 
-            println!("Usage: {prog_path} [conn | conns | connection | connections] [l | -l | list    | --list   ]");
-            print!("{}", " ".repeat(50 + prog_path.len()));              println!("[s | -s | select  | --select ] <ID>");
-            print!("{}", " ".repeat(50 + prog_path.len()));              println!("[r | -r | request | --request] <ADDR>");
-            print!("{}", " ".repeat(50 + prog_path.len()));              println!("[d | -d | decide  | --decide ] <ID> <DECISION>");
+            println!("Usage: ap2pcli [conn | conns | connection | connections] [l | -l | list    | --list   ]");
+            print!("{}", " ".repeat(57));              println!("[s | -s | select  | --select ] <ID>");
+            print!("{}", " ".repeat(57));              println!("[r | -r | request | --request] <ADDR>");
+            print!("{}", " ".repeat(57));              println!("[d | -d | decide  | --decide ] <ID> <DECISION>");
             println!();
-            println!("       {prog_path} [msg  | msgs  | message    | messages   ] [l | -l | list  | --list ]");
-            print!("{}", " ".repeat(50 + prog_path.len()));              println!("[s | -s | send  | --send ] <MSG>");
-            print!("{}", " ".repeat(50 + prog_path.len()));              println!("[b | -b | bulk  | --bulk ] <MSGS>");
+            println!("       ap2pcli [msg  | msgs  | message    | messages   ] [l | -l | list  | --list ]");
+            print!("{}", " ".repeat(57));              println!("[s | -s | send  | --send ] <MSG>");
+            print!("{}", " ".repeat(57));              println!("[b | -b | bulk  | --bulk ] <MSGS>");
             println!();
-            println!("       {prog_path} [help | -h    | --help   ]");
-            println!("       └─> Print this message and exit.");
+            println!("       ap2pcli [l | listen | await       ]");
+            println!("       ┗━▶ Listen for incoming connections and messages.");
+            println!("       ap2pcli [s | state                ]");
+            println!("       ┗━▶ Provide a key to get it's value from State; Use key=value syntax to set a value for a given key.");
+            println!("       ap2pcli [h | help | -h    | --help]");
+            println!("       ┗━▶ Print this message and exit.");
         }
         _ => {
             log!("ERROR: '{command}' is not a recognized command, see `{prog_path} help` for usage info");
