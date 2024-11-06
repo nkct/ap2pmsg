@@ -680,7 +680,6 @@ int ap2p_send_message(unsigned char content_type, int content_len, unsigned char
         return -1;
 }
 
-// TODO: improve error handling
 int ap2p_listen() {
     int res;
     sqlite3 *db = open_db();
@@ -767,9 +766,7 @@ int ap2p_listen() {
                 
                 sqlite3_stmt *insert_stmt;
                 const char* insert_sql = "INSERT INTO Connections (self_id, peer_name, peer_addr, peer_port, status) VALUES (?, ?, ?, ?, 2);";
-                if ( prepare_sql_statement(db, &insert_stmt, insert_sql, &create_conn_table) ) {
-                    continue;
-                }
+                if ( prepare_sql_statement(db, &insert_stmt, insert_sql, &create_conn_table) ) { continue; }
                 
                 int bind_fail = 0;
                 bind_fail |= (sqlite3_bind_int64(insert_stmt, 1, self_id) != SQLITE_OK);
@@ -810,9 +807,7 @@ int ap2p_listen() {
                 
                 sqlite3_stmt *update_stmt;
                 const char* update_sql = "UPDATE Connections SET updated_at=(strftime('%s', 'now')), status=3 WHERE peer_id=(?);";
-                if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) {
-                    continue;
-                }
+                if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) { continue; }
                 
                 if ( sqlite3_bind_int64(update_stmt, 1, peer_id) != SQLITE_OK ) {
                     ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
@@ -838,9 +833,7 @@ int ap2p_listen() {
                 
                 sqlite3_stmt *update_stmt;
                 const char* update_sql = "UPDATE Connections SET updated_at=(strftime('%s', 'now')), status=-1 WHERE peer_id=(?);";
-                if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) {
-                    continue;
-                }
+                if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) { continue; }
                 
                 if ( sqlite3_bind_int64(update_stmt, 1, peer_id) != SQLITE_OK ) {
                     ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
@@ -872,9 +865,7 @@ int ap2p_listen() {
                 
                 sqlite3_stmt *update_stmt;
                 const char* update_sql = "UPDATE Connections SET self_id=(?), peer_name=(?), updated_at=(strftime('%s', 'now')), status=0 WHERE peer_id=(?);";
-                if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) {
-                    continue;
-                }
+                if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) { continue; }
                 
                 if ( sqlite3_bind_int64(update_stmt, 1, peer_id) != SQLITE_OK ) {
                     ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
@@ -924,18 +915,18 @@ int ap2p_listen() {
                     char* select_sql = ""
                     "SELECT status, self_id, peer_addr, peer_port, peer_name FROM Connections "
                     "WHERE peer_id = ?;";
-                    if ( prepare_sql_statement(db, &select_stmt, select_sql, &create_msg_table) ) { goto exit_err_db; }
+                    if ( prepare_sql_statement(db, &select_stmt, select_sql, &create_msg_table) ) { continue; }
                     
                     if ( sqlite3_bind_int64(select_stmt, 1, peer_id) != SQLITE_OK ) {
                         ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
-                        return -1;
+                        continue;
                     }
                     
                     if ( sqlite3_step(select_stmt) == SQLITE_ROW ) {
                         int status = sqlite3_column_int(select_stmt, 0);
                         if ( status != accepted ) {
                             ap2p_log(ERROR": attempted to recieve message on connection which wasn't in the accepted state\n");
-                            goto exit_err_db;
+                            continue;
                         }
                         
                         self_id = sqlite3_column_int64(select_stmt, 1);
@@ -947,13 +938,14 @@ int ap2p_listen() {
                         strcpy(peer_name, (char*)sqlite3_column_text(select_stmt, 4));
                     } else {
                         ap2p_log(FAILED_STMT_STEP_ERR_MSG);
-                        return NULL;
+                        continue;
                     }
                     sqlite3_finalize(select_stmt);
                 }
                 
                 ap2p_log(INFO": recieved message of type %d from peer '%s'\n", content_type, peer_name);
                 
+                // content might be long, we want to avoid logging it, so we use recv() instead of recv_parcel()
                 unsigned char content[content_len];
                 if ( recv(incoming_sock, content, content_len, 0) < content_len ) {
                     ap2p_log(ERROR": failed to read message contents\n");
@@ -974,7 +966,7 @@ int ap2p_listen() {
                         "?, "
                         "?"
                     ") RETURNING time_recieved;";
-                    if ( prepare_sql_statement(db, &insert_stmt, insert_sql, &create_msg_table) ) { goto exit_err_db; }
+                    if ( prepare_sql_statement(db, &insert_stmt, insert_sql, &create_msg_table) ) { continue; }
                     
                     if ( 
                         sqlite3_bind_int64(insert_stmt, 1, peer_id) != SQLITE_OK ||
@@ -984,14 +976,14 @@ int ap2p_listen() {
                         sqlite3_bind_blob(insert_stmt, 5, content, content_len, SQLITE_STATIC) != SQLITE_OK
                     ) {
                         ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
-                        return -1;
+                        continue;
                     }
                         
                     if ( sqlite3_step(insert_stmt) == SQLITE_ROW ) {
                         time_recieved = sqlite3_column_int64(insert_stmt, 0);
                     } else {
                         ap2p_log(FAILED_STMT_STEP_ERR_MSG);
-                        return -1;
+                        continue;
                     }
                     sqlite3_finalize(insert_stmt);
                 }
@@ -1028,9 +1020,7 @@ int ap2p_listen() {
                 const char* update_sql = ""
                 "UPDATE Messages SET time_recieved=? WHERE shared_msg_id=? "
                 "AND conn_id=(SELECT conn_id FROM Connections WHERE peer_id=?);";
-                if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) {
-                    continue;
-                }
+                if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) { continue; }
                 
                 if ( 
                     sqlite3_bind_int64(update_stmt, 1, time_recieved) != SQLITE_OK ||
