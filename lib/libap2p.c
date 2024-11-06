@@ -35,8 +35,8 @@
 #define PARCEL_MSG_SEND_KIND 10 // send msg
 #define PARCEL_MSG_SEND_HDR_LEN 30 // kind[1] + self_id[8] + shared_msg_id[8] + time_sent[8] + content_type[1] + content_len[4] // add content_len separately
 
-#define PARCEL_MSG_ACK_KIND  11
-#define PARCEL_MSG_ACK_LEN 25 // kind[1] + self_id[8] + shared_msg_id[8] + time_recieved[8]
+#define PARCEL_MSG_RCV_KIND  11 // recieve msg
+#define PARCEL_MSG_RCV_LEN 25 // kind[1] + self_id[8] + shared_msg_id[8] + time_recieved[8]
 
 typedef enum ConnStatus {
     rejected    = -1, // the peer has reviewed this connection request and rejected it
@@ -680,6 +680,7 @@ int ap2p_send_message(unsigned char content_type, int content_len, unsigned char
         return -1;
 }
 
+// TODO: improve error handling
 int ap2p_listen() {
     int res;
     sqlite3 *db = open_db();
@@ -996,8 +997,8 @@ int ap2p_listen() {
                 }
                 
                 {
-                    unsigned char ack_parcel[PARCEL_MSG_ACK_LEN + content_len];
-                    ack_parcel[0] = PARCEL_MSG_ACK_KIND;
+                    unsigned char ack_parcel[PARCEL_MSG_RCV_LEN + content_len];
+                    ack_parcel[0] = PARCEL_MSG_RCV_KIND;
                     pack_long(ack_parcel+1, self_id);
                     pack_long(ack_parcel+9, shared_msg_id);
                     pack_long(ack_parcel+17, time_recieved);
@@ -1008,7 +1009,44 @@ int ap2p_listen() {
                         ap2p_log(INFO": recieved message from peer '%s'; \x1b[33mbut, failed to acknowledge it to the peer\x1b[0m\n", peer_name);
                     }
                 }
+            } break; case PARCEL_MSG_RCV_KIND: {
+                ap2p_log(INFO": recieved a MSG_RCV parcel\n");
+                unsigned char ack_parcel[PARCEL_MSG_RCV_LEN];
+                if ( recv_parcel(incoming_sock, ack_parcel, PARCEL_MSG_RCV_LEN) ) { continue; }
+
+                long peer_id = 0;
+                long shared_msg_id = 0;
+                long time_recieved = 0;
                 
+                unpack_long(peer_id, ack_parcel+1);
+                unpack_long(shared_msg_id, ack_parcel+9);
+                unpack_long(time_recieved, ack_parcel+17);
+
+                ap2p_log(DEBUG": peer with ID %ld recieved msg with SHARED ID %ld\n", peer_id, shared_msg_id);
+                
+                sqlite3_stmt *update_stmt;
+                const char* update_sql = ""
+                "UPDATE Messages SET time_recieved=? WHERE shared_msg_id=? "
+                "AND conn_id=(SELECT conn_id FROM Connections WHERE peer_id=?);";
+                if ( prepare_sql_statement(db, &update_stmt, update_sql, &create_conn_table) ) {
+                    continue;
+                }
+                
+                if ( 
+                    sqlite3_bind_int64(update_stmt, 1, time_recieved) != SQLITE_OK ||
+                    sqlite3_bind_int64(update_stmt, 2, shared_msg_id) != SQLITE_OK ||
+                    sqlite3_bind_int64(update_stmt, 3, peer_id) != SQLITE_OK
+                ) {
+                    ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
+                    continue;
+                }
+                
+                if ( sqlite3_step(update_stmt) != SQLITE_DONE ) {
+                    ap2p_log(FAILED_STMT_STEP_ERR_MSG);
+                    continue;
+                }
+                sqlite3_finalize(update_stmt);
+                ap2p_log(DEBUG": marked msg %ld for peer %ld as recieved\n", shared_msg_id, peer_id);
             } break; default:
                 ap2p_log(WARN": invalid parcel kind: %d\n", parcel_kind);
         }
