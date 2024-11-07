@@ -59,19 +59,22 @@ fn main() -> Result<(), isize> {
             match next_arg()?.as_str() {
                 "l" | "-l" | "list"    | "--list"    => { 
                     let conns = libap2p::list_connections(5).expect("could not list conns");
+                    let conns_len = conns.len();
                     
-                    println!("conn_count: {}", conns.len());
+                    log!("OK: retrieved {conns_len} connections");
                     for conn in conns {
-                        println!("{:#?}", conn);
-                        println!("peer_name: {:?}", conn.get_peer_name());
-                        println!("peer_addr: {:?}", conn.get_peer_addr());
+                        println!("{}", conn);
                     }
                 }
                 "s" | "-s" | "select"  | "--select"  => { 
                     if let Ok(id) = next_arg()?.parse::<u64>() {
-                        println!("ID: {id}");
-                        let res = libap2p::select_connection(id);
-                        println!("select_connection result: {res}"); 
+                        log!("DEBUG: <ID>={id}");
+                        if libap2p::select_connection(id) == 0 {
+                            log!("OK: succesfully selected connection");
+                        } else {
+                            log!("ERROR: failed to select connection");
+                            return Err(-1);
+                        }
                     } else {
                         log!("ERROR: <ID> must be a valid integer");
                         return Err(-1);
@@ -88,10 +91,14 @@ fn main() -> Result<(), isize> {
                             return Err(-1);
                         }
                         
-                        println!("ADDR: {addr}"); 
-                        println!("PORT: {port}"); 
-                        let res = libap2p::request_connection(addr, port);
-                        println!("request_connection result: {res}"); 
+                        log!("DEBUG: <ADDR>='{addr}'"); 
+                        log!("DEBUG: <PORT>='{port}'"); 
+                        if libap2p::request_connection(addr, port) == 0 {
+                            log!("OK: succesfully requested connection");
+                        } else {
+                            log!("ERROR: failed to request connection");
+                            return Err(-1);
+                        }
                     } else {
                         log!("ERROR: could not split the provided addres into <ADDR> and <PORT>");
                         return Err(-1);
@@ -109,7 +116,12 @@ fn main() -> Result<(), isize> {
                                 return Err(-1);
                             }
                         }
-                        println!("decide_on_connection result: {res}"); 
+                        if res == 0 {
+                            log!("OK: succesfully decided on connection");
+                        } else {
+                            log!("ERROR: failed to decide on connection");
+                            return Err(-1);
+                        }
                     }
                 }
                 subcommand => {
@@ -122,18 +134,22 @@ fn main() -> Result<(), isize> {
             match next_arg()?.as_str() {
                 "l" | "-l" | "list" | "--list" => { 
                     let msgs = libap2p::list_messages(5).expect("could not list msgs");
+                    let msgs_len = msgs.len();
                     
-                    println!("msgs_count: {}", msgs.len());
+                    log!("OK: retrieved {msgs_len} messages");
                     for msg in msgs {
-                        println!("{:#?}", msg);
-                        println!("content: {:?}", msg.get_content());
+                        println!("{}", msg);
                     }
                 }
                 "s" | "-s" | "send" | "--send" => { 
                     let msg = next_arg()?;
-                    println!("MSG: {msg}"); 
-                    let res = libap2p::send_text_message(&msg);
-                    println!("send_text_message result: {res}"); 
+                    log!("DEBUG: <MSG>='{msg}'"); 
+                    if libap2p::send_text_message(&msg) == 0 {
+                        log!("OK: succesfully sent message");
+                    } else {
+                        log!("ERROR: failed to send message");
+                        return Err(-1);
+                    }
                 }
                 "b" | "-b" | "bulk" | "--bulk" => { 
                     let msgs = next_arg()?;
@@ -146,19 +162,31 @@ fn main() -> Result<(), isize> {
             }
         }
         "l" | "listen" | "await" => {
-            let res = libap2p::listen();
-            println!("Finished listening with {}", res);
+            if libap2p::listen() == 0 {
+                log!("OK: finished listening");
+            } else {
+                log!("ERROR: error while listening");
+                return Err(-1);
+            }
         }
         "s" | "state" => {
             let param = next_arg()?;
             match param.split_once("=") {
                 None => {
-                    let value = libap2p::state_get(&param);
-                    println!("{}: {:?}", param, value);
+                    if let Some(value) = libap2p::state_get(&param) {
+                        println!("{}: {:?}", param, value);
+                    } else {
+                        log!("ERROR: failed to get from state");
+                        return Err(-1);
+                    }
                 }
                 Some((key, value)) => {
-                    let res = libap2p::state_set(&key, &value);
-                    println!("state_set result: {res}"); 
+                    if libap2p::state_set(&key, &value) == 0 {
+                        log!("OK: succesfully set to state");
+                    } else {
+                        log!("ERROR: failed to set to state");
+                        return Err(-1);
+                    }
                 }
             }
         }

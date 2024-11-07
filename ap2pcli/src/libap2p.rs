@@ -1,11 +1,9 @@
 #![allow(dead_code)]
 
 use std::{
-    ffi::{c_char, c_void, CStr, CString}, 
-    ptr, 
-    slice, 
-    str
+    ffi::{c_char, c_void, CStr, CString}, fmt, ptr, slice, str 
 };
+use chrono::prelude::*;
 
 #[link(name = "ap2p")]
 #[link(name = "sqlite3")]
@@ -46,6 +44,51 @@ pub struct Connection {
     updated_at: i64,
     status: ConnStatus,
 }
+impl fmt::Display for Connection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let requested_at = DateTime::from_timestamp(self.requested_at, 0).expect("INVALID TIMESTAMP");
+        let updated_at = if self.status != ConnStatus::Pending {
+            Some(DateTime::from_timestamp(self.updated_at, 0).expect("INVALID TIMESTAMP"))
+        } else {
+            None
+        };
+        
+        let self_id = if self.status == ConnStatus::Accepted || self.status == ConnStatus::SelfReview {
+            Some(self.self_id)
+        } else {
+            None
+        };
+        
+        let peer_id = if self.status == ConnStatus::SelfReview || self.status == ConnStatus::Rejected {
+            None
+        } else {
+            Some(self.peer_id)
+        };
+        
+        write!(f, "\
+            Connection with '{:?}' at {}:{} {{\n\
+            \x20\x20\x20\x20Connection ID: {}, \n\
+            \x20\x20\x20\x20Peer ID: {:?}, \n\
+            \x20\x20\x20\x20Self ID: {:?}, \n\
+            \x20\x20\x20\x20Online:  {}, \n\
+            \x20\x20\x20\x20Status:  {:?}, \n\
+            \x20\x20\x20\x20Requested at: {}, \n\
+            \x20\x20\x20\x20Updated   at: {:?}, \n\
+            }}\
+            ", 
+            self.get_peer_name(), 
+            self.get_peer_addr(), 
+            self.peer_port, 
+            self.conn_id, 
+            peer_id, 
+            self_id, 
+            self.online, 
+            self.status, 
+            requested_at.to_string(), 
+            updated_at
+        )
+    }
+}
 impl Connection {
     pub fn get_peer_name(&self) -> Option<&str> {
         if self.status == ConnStatus::Accepted || self.status == ConnStatus::SelfReview {
@@ -85,6 +128,28 @@ pub struct Message {
     content_type: u8,
     content_len: i32,
     content: *const u8,
+}
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let time_sent = DateTime::from_timestamp(self.time_sent, 0).expect("INVALID TIMESTAMP");
+        let time_recieved = if self.time_recieved > 0 {
+            Some(DateTime::from_timestamp(self.time_recieved, 0).expect("INVALID TIMESTAMP"))
+        } else {
+            None
+        };
+        write!(f, "\
+            Message {} on connection {} of type {}, \n\
+            Sent at {} and recieved at {:?}, \n\
+            Content: {:?} \
+            ",
+            self.shared_msg_id,
+            self.conn_id,
+            self.content_type,
+            time_sent, 
+            time_recieved,
+            self.get_content()
+        )
+    }
 }
 impl Message {
     pub fn get_content(&self) -> Vec<u8> {
