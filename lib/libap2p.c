@@ -10,9 +10,10 @@
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <netdb.h>
+#include <poll.h>
+#include <fcntl.h>
 
 #include "utilap2p.h"
-
 
 #define DEFAULT_LISTEN_ADDR "0.0.0.0"
 #define DEFAULT_PORT "7676"
@@ -730,7 +731,17 @@ int ap2p_listen() {
     
     struct sockaddr_in incoming_addr;
     int incoming_addr_len = sizeof(incoming_addr);
-    while (1) { // TODO: make interuptible with non-blocking accept() and getchar()
+    
+    struct pollfd* pfds = malloc(sizeof(struct pollfd));
+    pfds[0].fd = listening_sock;
+    pfds[0].events = POLLIN;
+    while (!getchar()) {
+        if ( poll(pfds, 1, 32) < 1 ) { continue; }
+        if ( !(pfds[0].revents & POLLIN) ) {
+            ap2p_log(WARN": unexpected poll event returned: %d\n", pfds[0].revents);
+            continue;
+        }
+        
         int incoming_sock = accept(listening_sock, (struct sockaddr*)&incoming_addr, (socklen_t*)&incoming_addr_len);
         char incoming_addr_str[MAX_IP_ADDR_LEN];
         inet_ntop(AF_INET, &incoming_addr.sin_addr, incoming_addr_str, MAX_IP_ADDR_LEN);
@@ -1040,9 +1051,11 @@ int ap2p_listen() {
             } break; default:
                 ap2p_log(WARN": invalid parcel kind: %d\n", parcel_kind);
         }
+        
+        ap2p_log(DEBUG": finished handling the parcel\n");
     }
     
-    ap2p_log(DEBUG": finished handling the parcel\n");
+    free(pfds);
     close(listening_sock);
     sqlite3_close(db);
     return 0;

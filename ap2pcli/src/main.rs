@@ -201,7 +201,7 @@ fn main() -> Result<(), isize> {
             print!("{}", " ".repeat(57));              println!("[b | -b | bulk  | --bulk ] <MSGS>");
             println!();
             println!("       ap2pcli [l | listen | await       ]");
-            println!("       ┗━▶ Listen for incoming connections and messages.");
+            println!("       ┗━▶ Listen for incoming connections and messages. Can be closed with Enter.");
             println!("       ap2pcli [s | state                ]");
             println!("       ┗━▶ Provide a key to get it's value from State; Use key=value syntax to set a value for a given key.");
             println!("       ap2pcli [h | help | -h    | --help]");
