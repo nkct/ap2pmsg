@@ -32,7 +32,8 @@
 #define FAILED_STMT_STEP_ERR_MSG ERROR": failed while evaluating the statement; " SQL_ERR_FMT "\n", SQL_ERR(db)
 #define FAILED_PARAM_BIND_ERR_MSG ERROR": failed to bind parameters; " SQL_ERR_FMT "\n", SQL_ERR(db)
 
-#define ap2p_log(...) fprintf(stderr, __VA_ARGS__)
+#define LOG_OUT "./ap2p_log.txt"
+#define ap2p_log(...) fprintf(fopen(LOG_OUT, "w"), __VA_ARGS__);
 // ==================================================
 
 // ================ Parcel Handling =================
@@ -41,7 +42,7 @@ for (int i=0;i<8;i++) {                   \
     (buf)[i] = ((d) >> (8*(7-i))) & 0xFF; \
 }
 
-#define pack_int(buf, d)                 \
+#define pack_int(buf, d)                  \
 for (int i=0;i<4;i++) {                   \
     (buf)[i] = ((d) >> (8*(3-i))) & 0xFF; \
 }
