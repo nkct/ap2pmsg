@@ -4,7 +4,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h> 
-#include <sqlite3.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -12,6 +11,8 @@
 #include <netdb.h>
 #include <poll.h>
 #include <fcntl.h>
+
+#include "sqlite3/sqlite3.h"
 
 #include "utilap2p.h"
 
@@ -254,7 +255,7 @@ int ap2p_state_set(sqlite3* db, const char* key, const char* value) {
     "VALUES(?, ?) "
     "ON CONFLICT "
     "DO UPDATE SET value=?;";
-    if ( prepare_sql_statement(db, &set_stmt, set_sql, &create_state_table) != SQLITE_OK ) { return NULL; }
+    if ( prepare_sql_statement(db, &set_stmt, set_sql, &create_state_table) != SQLITE_OK ) { goto exit_err; }
     
     int bind_fail = 0;
     bind_fail |= (sqlite3_bind_text(set_stmt, 1, key,   strlen(key),   SQLITE_STATIC) != SQLITE_OK);
@@ -262,12 +263,12 @@ int ap2p_state_set(sqlite3* db, const char* key, const char* value) {
     bind_fail |= (sqlite3_bind_text(set_stmt, 3, value, strlen(value), SQLITE_STATIC) != SQLITE_OK);
     if ( bind_fail ) {
         ap2p_log(FAILED_PARAM_BIND_ERR_MSG);
-        return -1;
+        goto exit_err;
     }
     
     if ( sqlite3_step(set_stmt) != SQLITE_DONE ) {
         ap2p_log(FAILED_STMT_STEP_ERR_MSG);
-        return -1;
+        goto exit_err;
     }
     sqlite3_finalize(set_stmt);
     
@@ -276,6 +277,12 @@ int ap2p_state_set(sqlite3* db, const char* key, const char* value) {
     }
     
     return 0;
+    
+    exit_err:
+        if ( db_null ) {
+            sqlite3_close(db);
+        }
+        return -1;
 }
 
 // non-zero on error
@@ -654,7 +661,7 @@ int ap2p_send_message(unsigned char content_type, int content_len, unsigned char
         strcpy(peer_name, (char*)sqlite3_column_text(select_stmt, 4));        
     } else {
         ap2p_log(FAILED_STMT_STEP_ERR_MSG);
-        return NULL;
+        goto exit_err_db;
     }
     sqlite3_finalize(select_stmt);
     
