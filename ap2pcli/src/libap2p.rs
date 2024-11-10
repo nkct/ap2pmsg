@@ -5,8 +5,6 @@ use std::{
 };
 use chrono::prelude::*;
 
-#[link(name = "ap2p")]
-#[link(name = "sqlite3")]
 extern "C" {
     fn ap2p_strlen(s: *const i8) -> usize;
     fn ap2p_free(p: *const c_void);
