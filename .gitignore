@@ -2,4 +2,6 @@ ap2pcli/target
 ap2pcli/*.db
 ap2pcli/ap2p_log.txt
 libap2p.a
+sqlite3.a
+build/
 dummy_peer

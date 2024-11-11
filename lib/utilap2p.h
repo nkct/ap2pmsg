@@ -5,7 +5,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
-#include <sqlite3.h>
+
+#include "sqlite3/sqlite3.h"
 
 #define startswith(str, pat) (strncmp((str), (pat), strlen((pat))) == 0)
 
