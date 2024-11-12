@@ -18,20 +18,20 @@
 // ==================================================
 
 // =========== Error Handling and Logging ===========
-#define ERROR "\x1b[31mERROR\x1b[0m"
-#define WARN "\x1b[33mWARN\x1b[0m"
-#define INFO  "\x1b[34mINFO\x1b[0m"
-#define DEBUG  "\x1b[36mDEBUG\x1b[0m"
+#define LOG_ERROR "\x1b[31mERROR\x1b[0m"
+#define LOG_WARN "\x1b[33mWARN\x1b[0m"
+#define LOG_INFO  "\x1b[34mINFO\x1b[0m"
+#define LOG_DEBUG  "\x1b[36mDEBUG\x1b[0m"
 
 #define SQL_ERR_FMT "%s (%d)"
 #define SQL_ERR(db) sqlite3_errmsg((db)), sqlite3_errcode((db))
 #define NET_ERR_FMT "at %s:%d; %s"
 #define NET_ERR(addr, port) (addr), (port), strerror(errno)
 
-#define FAILED_DB_OPEN_ERR_MSG ERROR": could not open database at '%s'\n", DB_FILE
-#define FAILED_PREPARE_STMT_ERR_MSG(sql) ERROR": failed to prepare statement from '%s', " SQL_ERR_FMT "\n", (sql), SQL_ERR(db)
-#define FAILED_STMT_STEP_ERR_MSG ERROR": failed while evaluating the statement; " SQL_ERR_FMT "\n", SQL_ERR(db)
-#define FAILED_PARAM_BIND_ERR_MSG ERROR": failed to bind parameters; " SQL_ERR_FMT "\n", SQL_ERR(db)
+#define FAILED_DB_OPEN_ERR_MSG LOG_ERROR": could not open database at '%s'\n", DB_FILE
+#define FAILED_PREPARE_STMT_ERR_MSG(sql) LOG_ERROR": failed to prepare statement from '%s', " SQL_ERR_FMT "\n", (sql), SQL_ERR(db)
+#define FAILED_STMT_STEP_ERR_MSG LOG_ERROR": failed while evaluating the statement; " SQL_ERR_FMT "\n", SQL_ERR(db)
+#define FAILED_PARAM_BIND_ERR_MSG LOG_ERROR": failed to bind parameters; " SQL_ERR_FMT "\n", SQL_ERR(db)
 
 #define LOG_OUT "./ap2p_log.txt"
 #define ap2p_log(...) fprintf(fopen(LOG_OUT, "w"), __VA_ARGS__);
@@ -61,15 +61,15 @@ for (int i=0;i<4;i++) {          \
 extern inline int send_parcel(unsigned char* parcel, unsigned long parcel_len, char* addr, int port) {
     if (parcel_len == 0) { return 0; }
     
-    ap2p_log(DEBUG": sending parcel: [");
-    for (int i = 0; i<parcel_len; i++) {
+    ap2p_log(LOG_DEBUG": sending parcel: [");
+    for (unsigned long i = 0; i < parcel_len; i++) {
         ap2p_log("%d, ", parcel[i]);
     }
     ap2p_log("]\n");
     
     int peer_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (peer_sock < 0) {
-        ap2p_log(ERROR": failed to create peer socket; %s\n", strerror(errno));
+        ap2p_log(LOG_ERROR": failed to create peer socket; %s\n", strerror(errno));
         close(peer_sock);
         return -1;
     }
@@ -80,15 +80,15 @@ extern inline int send_parcel(unsigned char* parcel, unsigned long parcel_len, c
     peer_sockaddr.sin_addr.s_addr = inet_addr(addr);
     
     if ( connect(peer_sock, (struct sockaddr*)&peer_sockaddr, sizeof(peer_sockaddr)) != 0 ) {
-        ap2p_log(WARN": could not connect " NET_ERR_FMT "\n", NET_ERR(addr, port));
+        ap2p_log(LOG_WARN": could not connect " NET_ERR_FMT "\n", NET_ERR(addr, port));
         close(peer_sock);
         return -1;
     }
     
-    if ( send(peer_sock, parcel, parcel_len, 0) == parcel_len) {
-        ap2p_log(DEBUG": sent parcel of kind %d to %s:%d\n", parcel[0], addr, port);
+    if ( (unsigned)send(peer_sock, (void*)parcel, parcel_len, 0) == parcel_len) {
+        ap2p_log(LOG_DEBUG": sent parcel of kind %d to %s:%d\n", parcel[0], addr, port);
     } else {
-        ap2p_log(WARN": could not send parcel " NET_ERR_FMT "\n", NET_ERR(addr, port));
+        ap2p_log(LOG_WARN": could not send parcel " NET_ERR_FMT "\n", NET_ERR(addr, port));
         close(peer_sock);
         return -1;
     }
@@ -96,12 +96,12 @@ extern inline int send_parcel(unsigned char* parcel, unsigned long parcel_len, c
     return 0;
 }
 extern inline int recv_parcel(int sock, unsigned char* parcel, unsigned long parcel_len) {
-    if (recv(sock, parcel, parcel_len, 0) < parcel_len) {
-        ap2p_log(WARN": could not read parcel contents; %s\n", strerror(errno));
+    if ( (unsigned)recv(sock, (void*)parcel, parcel_len, 0) < parcel_len ) {
+        ap2p_log(LOG_WARN": could not read parcel contents; %s\n", strerror(errno));
         return -1;
     }
-    ap2p_log(DEBUG": parcel: [");
-    for (int i = 0; i<parcel_len; i++) {
+    ap2p_log(LOG_DEBUG": parcel: [");
+    for (unsigned long i = 0; i<parcel_len; i++) {
         ap2p_log("%d, ", parcel[i]);
     }
     ap2p_log("]\n");
@@ -112,8 +112,13 @@ extern inline int recv_parcel(int sock, unsigned char* parcel, unsigned long par
 
 // ============= Database Handling ==================
 // logs every executed sql query, set in open_db()
-extern inline int trace_callback(unsigned int T, void* C, void* P, void* X) {
-    ap2p_log(DEBUG": executing query: '%s'\n", sqlite3_expanded_sql((sqlite3_stmt*)P));
+extern inline int trace_callback(
+    __attribute__((unused)) unsigned int T, 
+    __attribute__((unused)) void* C, 
+    void* P, 
+    __attribute__((unused)) void* X
+) {
+    ap2p_log(LOG_DEBUG": executing query: '%s'\n", sqlite3_expanded_sql((sqlite3_stmt*)P));
     return 0;
 }
 
@@ -129,7 +134,7 @@ extern inline sqlite3* open_db() {
 }
 extern inline int prepare_sql_statement(sqlite3* db, sqlite3_stmt** stmt, const char* sql, int create_table(sqlite3*)) {
     if (sql[strlen(sql)-1] != ';') {
-        printf(WARN": no semicolon at the end of the sql\n");
+        printf(LOG_WARN": no semicolon at the end of the sql\n");
     }
 
     int res;
