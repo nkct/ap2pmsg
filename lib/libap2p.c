@@ -1,4 +1,7 @@
 #include "utilap2p.h"
+#include <string.h>
+#include <sys/select.h>
+#include <unistd.h>
 
 #define DEFAULT_LISTEN_ADDR "0.0.0.0"
 #define DEFAULT_PORT "7676"
@@ -683,7 +686,7 @@ int ap2p_listen() {
         .sin_addr.s_addr = inet_addr(listen_addr),
         .sin_port = htons(self_port),
     };
-    if (bind(listening_sock, (struct sockaddr *)&listening_addr, sizeof(listening_addr)) < 0) {
+    if (bind(listening_sock, (struct sockaddr*)&listening_addr, sizeof(listening_addr)) < 0) {
       ap2p_log(LOG_ERROR": failed to bind server socket; %s\n", strerror(errno));
       goto exit_err_net;
     }
@@ -698,14 +701,20 @@ int ap2p_listen() {
     struct sockaddr_in incoming_addr;
     int incoming_addr_len = sizeof(incoming_addr);
     
-    struct pollfd* pfds = malloc(sizeof(struct pollfd));
-    pfds[0].fd = listening_sock;
-    pfds[0].events = POLLIN;
-    while (!getchar()) {
-        if ( poll(pfds, 1, 32) < 1 ) { continue; }
-        if ( !(pfds[0].revents & POLLIN) ) {
-            ap2p_log(LOG_WARN": unexpected poll event returned: %d\n", pfds[0].revents);
-            continue;
+    fd_set rfds;
+    struct timeval tv = {0};
+    
+    int ret;
+    fcntl (STDIN_FILENO, F_SETFL, O_NONBLOCK);
+    while (getchar() < 1) {
+        tv.tv_usec = 320000;
+        FD_ZERO(&rfds);
+        FD_SET(listening_sock, &rfds);
+        
+        ret = select(listening_sock+1, &rfds, NULL, NULL, &tv);
+        if ( ret < 1 ) { 
+            // printf("select ret: %d\n", ret); 
+            continue; 
         }
         
         int incoming_sock = accept(listening_sock, (struct sockaddr*)&incoming_addr, (socklen_t*)&incoming_addr_len);
@@ -1021,7 +1030,6 @@ int ap2p_listen() {
         ap2p_log(LOG_DEBUG": finished handling the parcel\n");
     }
     
-    free(pfds);
     close(listening_sock);
     sqlite3_close(db);
     return 0;
