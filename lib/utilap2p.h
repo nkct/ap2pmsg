@@ -1,10 +1,20 @@
 #include <stdio.h>
 #include <time.h>
 #include <errno.h>
-#include <arpa/inet.h>
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
+
+#if defined(_WIN32) || defined(_WIN64)
+    #include <winsock2.h>
+    #include <iphlpapi.h>
+    #include <ws2tcpip.h>
+#else
+    #include <arpa/inet.h>
+    #include <ifaddrs.h>
+    #include <poll.h>
+    #include <fcntl.h>
+#endif
 
 #include "sqlite3/sqlite3.h"
 
@@ -33,8 +43,9 @@
 #define FAILED_STMT_STEP_ERR_MSG LOG_ERROR": failed while evaluating the statement; " SQL_ERR_FMT "\n", SQL_ERR(db)
 #define FAILED_PARAM_BIND_ERR_MSG LOG_ERROR": failed to bind parameters; " SQL_ERR_FMT "\n", SQL_ERR(db)
 
-#define LOG_OUT "./ap2p_log.txt"
-#define ap2p_log(...) fprintf(fopen(LOG_OUT, "w"), __VA_ARGS__);
+// #define LOG_OUT "./ap2p_log.txt"
+#define LOG_OUT "/dev/stderr"
+#define ap2p_log(...) { FILE* log_out = fopen(LOG_OUT, "a"); fprintf(log_out, __VA_ARGS__); fflush(log_out); fclose(log_out); }
 // ==================================================
 
 // ================ Parcel Handling =================
@@ -158,6 +169,73 @@ extern inline int prepare_sql_statement(sqlite3* db, sqlite3_stmt** stmt, const 
 extern inline long generate_id() {
     // TODO: more sophisticated peer_id generation
     // which would ensure non-repeatability
-    srandom(time(NULL));
-    return random();
+    srand(time(NULL));
+    return rand();
+}
+
+extern inline int get_self_addr(char* buf) {
+    int found_addr = 0;
+    #if defined(_WIN32) || defined(_WIN64) // on windows use GetAdaptersInfo
+        
+        unsigned long gai_buf_len = 0;
+        IP_ADAPTER_INFO* adapter_info = NULL;
+        
+        // Make an initial call to GetAdaptersInfo to get
+        // the necessary size into the gai_buf_len variable
+        if (GetAdaptersInfo(adapter_info, &gai_buf_len) == ERROR_BUFFER_OVERFLOW) {
+            adapter_info = (IP_ADAPTER_INFO*)malloc(gai_buf_len);
+            if (adapter_info == NULL) {
+                ap2p_log(LOG_ERROR": Error allocating memory needed to call GetAdaptersInfo\n");
+                return -1;
+            }
+        }
+        
+        int ret;
+        if ( (ret = GetAdaptersInfo(adapter_info, &gai_buf_len)) != NO_ERROR ) {
+            ap2p_log(LOG_ERROR": GetAdaptersInfo failed with error: %d\n", ret);
+        }
+        
+        IP_ADAPTER_INFO* adapter = adapter_info;
+        while (adapter) {
+            if ( adapter->Type == MIB_IF_TYPE_LOOPBACK ) {
+                continue;
+            }
+            
+            strcpy(buf, adapter->IpAddressList.IpAddress.String);
+            found_addr = 1;
+            break;
+        }
+        
+        if (adapter_info) {
+            free(adapter_info);
+        }
+    
+    #else // on linux, use getifaddrs 
+        struct ifaddrs *ifaddr;
+        if (getifaddrs(&ifaddr) == -1) {
+            ap2p_log(LOG_ERROR": could not obtain the interface structure; %s\n", strerror(errno));
+            return -1;
+        }
+        
+        for (struct ifaddrs *ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+            if ( ifa->ifa_addr == NULL || ifa->ifa_addr->sa_family != AF_INET ) { continue; }
+    
+            struct sockaddr_in* inet_addr = (struct sockaddr_in*)ifa->ifa_addr;
+            
+            if ( ntohl(inet_addr->sin_addr.s_addr) != INADDR_LOOPBACK ) {
+                inet_ntop(AF_INET, &inet_addr->sin_addr, buf, MAX_IP_ADDR_LEN);
+                found_addr = 1;
+                break;
+            }
+        }
+        
+        freeifaddrs(ifaddr);
+    #endif
+
+    if (!found_addr) {
+        ap2p_log(LOG_ERROR": failed to find self addr\n");
+        return -1;
+    }
+    
+    return 0;
 }

@@ -1,6 +1,5 @@
 #include "utilap2p.h"
 #include <string.h>
-#include <sys/select.h>
 #include <unistd.h>
 
 #define DEFAULT_LISTEN_ADDR "0.0.0.0"
@@ -704,18 +703,25 @@ int ap2p_listen() {
     fd_set rfds;
     struct timeval tv = {0};
     
-    int ret;
-    fcntl (STDIN_FILENO, F_SETFL, O_NONBLOCK);
-    while (getchar() < 1) {
+    // set up non-blocking stdin read
+    #if defined(_WIN32) || defined(_WIN64)
+        HANDLE hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    #else
+        fcntl (STDIN_FILENO, F_SETFL, O_NONBLOCK);
+    #endif
+    
+    while (1) {
+        // perform non-blocking stdin read
+        #if defined(_WIN32) || defined(_WIN64)
+            if ( WaitForSingleObject(hStdInput, 0) == WAIT_OBJECT_0 ) { break; }
+        #else
+            if ( getchar() > 0 ) { break; }
+        #endif
+        
         tv.tv_usec = 320000;
         FD_ZERO(&rfds);
         FD_SET(listening_sock, &rfds);
-        
-        ret = select(listening_sock+1, &rfds, NULL, NULL, &tv);
-        if ( ret < 1 ) { 
-            // printf("select ret: %d\n", ret); 
-            continue; 
-        }
+        if ( select(listening_sock+1, &rfds, NULL, NULL, &tv) < 1 ) { continue; }
         
         int incoming_sock = accept(listening_sock, (struct sockaddr*)&incoming_addr, (socklen_t*)&incoming_addr_len);
         char incoming_addr_str[MAX_IP_ADDR_LEN];
