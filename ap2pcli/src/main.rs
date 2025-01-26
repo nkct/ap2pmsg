@@ -190,6 +190,7 @@ fn main() -> Result<(), isize> {
                 }
             }
         }
+        // TODO: this needs some colors, better arrows and underlines
         "h" | "help" | "-h"    | "--help"                     => { 
             println!("Usage: ap2pcli [conn | conns | connection | connections] [l | -l | list    | --list   ]");
             print!("{}", " ".repeat(57));              println!("[s | -s | select  | --select ] <ID>");
